@@ -21,8 +21,8 @@ export default function HomeScreen() {
   return (
     <ScreenContainer scrollable>
       <View style={styles.headerRow}>
-        <View style={styles.avatarBubble}>
-          <Text style={styles.avatarText}>{(user?.name ?? 'S').slice(0, 1).toUpperCase()}</Text>
+        <View style={[styles.avatarBubble, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Text style={[styles.avatarText, { color: theme.primary }]}>{(user?.name ?? 'S').slice(0, 1).toUpperCase()}</Text>
         </View>
         <View style={styles.headerCopy}>
           <Text style={[styles.kicker, { color: theme.secondary }]}>Signed in</Text>
@@ -32,17 +32,17 @@ export default function HomeScreen() {
 
       <Text style={[styles.description, { color: theme.textMuted }]}>This is a temporary home screen you can replace with the real student dashboard later.</Text>
 
-      <View style={[styles.card, { backgroundColor: theme.surface }]}>
+      <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <View style={styles.cardRow}>
-          <Ionicons name="book-outline" size={20} color={theme.primary} />
+          <Ionicons name="book-outline" size={18} color={theme.primary} />
           <Text style={[styles.cardText, { color: theme.text }]}>Focus session ready for today</Text>
         </View>
         <View style={styles.cardRow}>
-          <Ionicons name="alarm-outline" size={20} color={theme.primary} />
+          <Ionicons name="alarm-outline" size={18} color={theme.primary} />
           <Text style={[styles.cardText, { color: theme.text }]}>Your next study reminder can live here</Text>
         </View>
         <View style={styles.cardRow}>
-          <Ionicons name="list-outline" size={20} color={theme.primary} />
+          <Ionicons name="list-outline" size={18} color={theme.primary} />
           <Text style={[styles.cardText, { color: theme.text }]}>Tasks, habits, and streaks can be added later</Text>
         </View>
       </View>
@@ -60,14 +60,13 @@ const styles = StyleSheet.create({
   },
   avatarBubble: {
     alignItems: 'center',
-    backgroundColor: 'rgba(79, 70, 229, 0.12)',
     borderRadius: Radius.pill,
-    height: 64,
+    height: 56,
     justifyContent: 'center',
-    width: 64,
+    width: 56,
+    borderWidth: 1.5,
   },
   avatarText: {
-    color: '#4F46E5',
     fontSize: Typography.title,
     fontWeight: '800',
   },
@@ -78,30 +77,27 @@ const styles = StyleSheet.create({
     fontSize: Typography.caption,
     fontWeight: '800',
     letterSpacing: 1,
-    marginBottom: Spacing.xs,
+    marginBottom: Spacing.xs - 2,
     textTransform: 'uppercase',
   },
   title: {
-    fontSize: Typography.title + 6,
+    fontSize: Typography.title + 2,
     fontWeight: '800',
     letterSpacing: -0.6,
-    lineHeight: 36,
+    lineHeight: 30,
   },
   description: {
-    fontSize: Typography.body,
-    lineHeight: 24,
+    fontSize: Typography.body - 1,
+    lineHeight: 22,
     marginTop: Spacing.md,
   },
   card: {
-    borderRadius: Radius.lg,
-    gap: Spacing.md,
-    marginTop: Spacing.xl,
-    padding: Spacing.lg,
-    shadowColor: '#10213A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
+    borderRadius: Radius.md,
+    gap: Spacing.sm + 2,
+    marginTop: Spacing.lg,
+    padding: Spacing.md + 2,
+    borderWidth: 1,
+    marginBottom: Spacing.lg,
   },
   cardRow: {
     alignItems: 'center',
@@ -110,7 +106,7 @@ const styles = StyleSheet.create({
   },
   cardText: {
     flex: 1,
-    fontSize: Typography.body,
-    lineHeight: 22,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
   },
 });

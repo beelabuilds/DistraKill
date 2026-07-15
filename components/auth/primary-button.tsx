@@ -1,18 +1,24 @@
-import { Link, type Href } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { Link, type Href } from "expo-router";
+import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
 
-import { Radius, Spacing, Typography } from '@/constants/auth-theme';
-import { useAuthTheme } from '@/hooks/use-auth-theme';
+import { Radius, Spacing, Typography } from "@/constants/auth-theme";
+import { useAuthTheme } from "@/hooks/use-auth-theme";
 
 type PrimaryButtonProps = {
   label: string;
   loading?: boolean;
   onPress?: () => void | Promise<void>;
-  tone?: 'primary' | 'secondary';
+  tone?: "primary" | "secondary";
   href?: Href;
 };
 
-export function PrimaryButton({ label, loading = false, onPress, tone = 'primary', href }: PrimaryButtonProps) {
+export function PrimaryButton({
+  label,
+  loading = false,
+  onPress,
+  tone = "primary",
+  href,
+}: PrimaryButtonProps) {
   const theme = useAuthTheme();
 
   const button = (
@@ -23,13 +29,27 @@ export function PrimaryButton({ label, loading = false, onPress, tone = 'primary
       style={({ pressed }) => [
         styles.button,
         {
-          backgroundColor: tone === 'primary' ? theme.primary : theme.surfaceSoft,
-          borderColor: tone === 'primary' ? theme.primary : theme.border,
+          backgroundColor:
+            tone === "primary" ? theme.primary : theme.surfaceSoft,
+          borderColor: tone === "primary" ? theme.primary : theme.border,
         },
         pressed && styles.pressed,
       ]}
     >
-      {loading ? <ActivityIndicator color={tone === 'primary' ? '#FFFFFF' : theme.primary} /> : <Text style={[styles.label, { color: tone === 'primary' ? '#FFFFFF' : theme.text }]}>{label}</Text>}
+      {loading ? (
+        <ActivityIndicator
+          color={tone === "primary" ? theme.buttonText : theme.primary}
+        />
+      ) : (
+        <Text
+          style={[
+            styles.label,
+            { color: tone === "primary" ? theme.buttonText : theme.text },
+          ]}
+        >
+          {label}
+        </Text>
+      )}
     </Pressable>
   );
 
@@ -46,17 +66,17 @@ export function PrimaryButton({ label, loading = false, onPress, tone = 'primary
 
 const styles = StyleSheet.create({
   button: {
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: Radius.pill,
     borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    minHeight: 54,
+    flexDirection: "row",
+    justifyContent: "center",
+    minHeight: 48,
     paddingHorizontal: Spacing.lg,
   },
   label: {
     fontSize: Typography.button,
-    fontWeight: '800',
+    fontWeight: "700",
     letterSpacing: 0.2,
   },
   pressed: {

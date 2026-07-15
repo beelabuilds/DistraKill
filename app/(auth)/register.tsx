@@ -1,15 +1,17 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Link, useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { Link, useRouter } from "expo-router";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { AuthInput } from '@/components/auth/auth-input';
-import { PasswordInput } from '@/components/auth/password-input';
-import { PrimaryButton } from '@/components/auth/primary-button';
-import { ScreenContainer } from '@/components/auth/screen-container';
-import { Radius, Spacing, Typography } from '@/constants/auth-theme';
-import { useAuth } from '@/contexts/auth-context';
-import { isValidEmail } from '@/utils/auth-validation';
+import { AuthInput } from "@/components/auth/auth-input";
+import { BackButton } from "@/components/auth/back-button";
+import { PasswordInput } from "@/components/auth/password-input";
+import { PrimaryButton } from "@/components/auth/primary-button";
+import { ScreenContainer } from "@/components/auth/screen-container";
+import { Radius, Spacing, Typography } from "@/constants/auth-theme";
+import { useAuth } from "@/contexts/auth-context";
+import { useAuthTheme } from "@/hooks/use-auth-theme";
+import { isValidEmail } from "@/utils/auth-validation";
 
 type RegisterErrors = {
   name?: string;
@@ -22,11 +24,12 @@ type RegisterErrors = {
 
 export default function RegisterScreen() {
   const router = useRouter();
+  const theme = useAuthTheme();
   const { register } = useAuth();
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<RegisterErrors>({});
@@ -35,29 +38,29 @@ export default function RegisterScreen() {
     const nextErrors: RegisterErrors = {};
 
     if (!name.trim()) {
-      nextErrors.name = 'Full name is required.';
+      nextErrors.name = "Full name is required.";
     }
 
     if (!email.trim()) {
-      nextErrors.email = 'Email is required.';
+      nextErrors.email = "Email is required.";
     } else if (!isValidEmail(email)) {
-      nextErrors.email = 'Enter a valid email address.';
+      nextErrors.email = "Enter a valid email address.";
     }
 
     if (!password.trim()) {
-      nextErrors.password = 'Password is required.';
+      nextErrors.password = "Password is required.";
     } else if (password.length < 8) {
-      nextErrors.password = 'Password must contain at least 8 characters.';
+      nextErrors.password = "Password must contain at least 8 characters.";
     }
 
     if (!confirmPassword.trim()) {
-      nextErrors.confirmPassword = 'Confirm your password.';
+      nextErrors.confirmPassword = "Confirm your password.";
     } else if (confirmPassword !== password) {
-      nextErrors.confirmPassword = 'Passwords do not match.';
+      nextErrors.confirmPassword = "Passwords do not match.";
     }
 
     if (!acceptedTerms) {
-      nextErrors.terms = 'Please accept the terms and privacy notice.';
+      nextErrors.terms = "Please accept the terms and privacy notice.";
     }
 
     setErrors(nextErrors);
@@ -74,9 +77,11 @@ export default function RegisterScreen() {
 
     try {
       await register(name.trim(), email.trim(), password);
-      router.replace('/home');
+      router.replace("/home");
     } catch {
-      setErrors({ form: 'Unable to create the account right now. Please try again.' });
+      setErrors({
+        form: "Unable to create the account right now. Please try again.",
+      });
     } finally {
       setLoading(false);
     }
@@ -84,19 +89,20 @@ export default function RegisterScreen() {
 
   return (
     <ScreenContainer scrollable>
+      <BackButton fallbackHref="/welcome" />
       <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.kicker}>Get started</Text>
-          <Text style={styles.title}>Create your account</Text>
-        </View>
-        <View style={styles.iconBubble}>
-          <Ionicons name="person-add-outline" size={24} color="#14B8A6" />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.kicker, { color: theme.secondary }]}>Get started</Text>
+          <Text style={[styles.title, { color: theme.text }]}>Create your account</Text>
         </View>
       </View>
 
-      <Text style={styles.description}>Build your student workspace in a few steps and keep your login details organized.</Text>
+      <Text style={[styles.description, { color: theme.textMuted }]}>
+        Build your student workspace in a few steps and keep your login details
+        organized.
+      </Text>
 
-      <View style={styles.formCard}>
+      <View style={[styles.formCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <AuthInput
           autoComplete="name"
           label="Full name"
@@ -135,24 +141,45 @@ export default function RegisterScreen() {
           accessibilityState={{ checked: acceptedTerms }}
           hitSlop={12}
           onPress={() => setAcceptedTerms((current) => !current)}
-          style={[styles.checkboxRow, acceptedTerms ? styles.checkboxRowActive : undefined]}
+          style={[
+            styles.checkboxRow,
+            acceptedTerms ? styles.checkboxRowActive : undefined,
+          ]}
         >
-          <View style={[styles.checkbox, acceptedTerms ? styles.checkboxActive : undefined]}>
-            {acceptedTerms ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+          <View
+            style={[
+              styles.checkbox,
+              { borderColor: acceptedTerms ? theme.primary : theme.border },
+              acceptedTerms ? { backgroundColor: theme.primary } : undefined,
+            ]}
+          >
+            {acceptedTerms ? (
+              <Ionicons name="checkmark" size={14} color={theme.buttonText} />
+            ) : null}
           </View>
-          <Text style={styles.checkboxText}>I agree to the terms and privacy policy.</Text>
+          <Text style={[styles.checkboxText, { color: theme.text }]}>
+            I agree to the terms and privacy policy.
+          </Text>
         </Pressable>
-        {errors.terms ? <Text style={styles.inlineError}>{errors.terms}</Text> : null}
-        {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
+        {errors.terms ? (
+          <Text style={[styles.inlineError, { color: theme.error }]}>{errors.terms}</Text>
+        ) : null}
+        {errors.form ? (
+          <Text style={[styles.formError, { color: theme.error }]}>{errors.form}</Text>
+        ) : null}
 
-        <PrimaryButton label="Create account" loading={loading} onPress={handleRegister} />
+        <PrimaryButton
+          label="Create account"
+          loading={loading}
+          onPress={handleRegister}
+        />
       </View>
 
       <View style={styles.footerRow}>
-        <Text style={styles.footerText}>Already have an account?</Text>
+        <Text style={[styles.footerText, { color: theme.textMuted }]}>Already have an account?</Text>
         <Link href="/login" asChild>
           <Pressable accessibilityRole="link" hitSlop={10}>
-            <Text style={styles.footerLink}>Login</Text>
+            <Text style={[styles.footerLink, { color: theme.primary }]}>Login</Text>
           </Pressable>
         </Link>
       </View>
@@ -162,55 +189,39 @@ export default function RegisterScreen() {
 
 const styles = StyleSheet.create({
   headerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
     gap: Spacing.md,
   },
   kicker: {
-    color: '#0F9D9A',
     fontSize: Typography.caption,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 1,
-    marginBottom: Spacing.xs,
-    textTransform: 'uppercase',
+    marginBottom: Spacing.xs - 2,
+    textTransform: "uppercase",
   },
   title: {
-    color: '#16233D',
-    fontSize: Typography.title + 4,
-    fontWeight: '800',
+    fontSize: Typography.title + 2,
+    fontWeight: "800",
     letterSpacing: -0.5,
-    lineHeight: 34,
-  },
-  iconBubble: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(20, 184, 166, 0.12)',
-    borderRadius: Radius.pill,
-    height: 56,
-    justifyContent: 'center',
-    width: 56,
+    lineHeight: 30,
   },
   description: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
-    lineHeight: 23,
-    marginTop: Spacing.sm,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
+    marginTop: Spacing.xs,
   },
   formCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: Radius.lg,
-    gap: Spacing.md,
-    marginTop: Spacing.xl,
-    padding: Spacing.lg,
-    shadowColor: '#10213A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
+    borderRadius: Radius.md,
+    gap: Spacing.sm + 2,
+    marginTop: Spacing.lg,
+    padding: Spacing.md + 2,
+    borderWidth: 1,
   },
   checkboxRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
+    alignItems: "center",
+    flexDirection: "row",
     gap: Spacing.sm,
     paddingVertical: Spacing.xs,
   },
@@ -218,49 +229,39 @@ const styles = StyleSheet.create({
     opacity: 1,
   },
   checkbox: {
-    alignItems: 'center',
-    borderColor: '#CBD5E1',
+    alignItems: "center",
     borderRadius: Radius.sm,
     borderWidth: 1.5,
-    height: 24,
-    justifyContent: 'center',
-    width: 24,
-  },
-  checkboxActive: {
-    backgroundColor: '#4F46E5',
-    borderColor: '#4F46E5',
+    height: 20,
+    justifyContent: "center",
+    width: 20,
   },
   checkboxText: {
-    color: '#16233D',
     flex: 1,
-    fontSize: Typography.body,
-    lineHeight: 22,
+    fontSize: Typography.body - 2,
+    lineHeight: 18,
   },
   inlineError: {
-    color: '#B42318',
     fontSize: Typography.caption,
     lineHeight: 18,
     marginTop: -Spacing.xs,
   },
   formError: {
-    color: '#B42318',
-    fontSize: Typography.body,
-    lineHeight: 22,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
   },
   footerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
     gap: Spacing.xs,
-    marginTop: Spacing.lg,
+    marginTop: Spacing.md + 4,
   },
   footerText: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
+    fontSize: Typography.body - 1,
   },
   footerLink: {
-    color: '#4F46E5',
-    fontSize: Typography.body,
-    fontWeight: '800',
+    fontSize: Typography.body - 1,
+    fontWeight: "800",
   },
 });
