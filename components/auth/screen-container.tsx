@@ -16,12 +16,14 @@ type ScreenContainerProps = {
   children: ReactNode;
   scrollable?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  topRight?: ReactNode;
 };
 
 export function ScreenContainer({
   children,
   scrollable = false,
   contentStyle,
+  topRight,
 }: ScreenContainerProps) {
   const theme = useAuthTheme();
 
@@ -47,10 +49,25 @@ export function ScreenContainer({
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: theme.background }]}
     >
-      <View style={[styles.backgroundGlow, { backgroundColor: theme.glow }]} />
       <View
-        style={[styles.backgroundBlob, { backgroundColor: theme.surfaceSoft }]}
+        pointerEvents="none"
+        style={[styles.backgroundGlow, { backgroundColor: theme.glow }]}
       />
+
+      <View
+        pointerEvents="none"
+        style={[
+          styles.backgroundBlob,
+          { backgroundColor: theme.surfaceSoft },
+        ]}
+      />
+
+      {topRight ? (
+        <View pointerEvents="box-none" style={styles.topRight}>
+          {topRight}
+        </View>
+      ) : null}
+
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.flex}
@@ -65,26 +82,38 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+
   flex: {
     flex: 1,
   },
+
   scrollContent: {
     flexGrow: 1,
     justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 20,
   },
+
   staticContent: {
     flex: 1,
     justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 20,
   },
+
   contentWidth: {
     alignSelf: "center",
     maxWidth: 560,
     width: "100%",
   },
+
+  topRight: {
+    position: "absolute",
+    right: 18,
+    top: 12,
+    zIndex: 20,
+  },
+
   backgroundGlow: {
     borderRadius: 999,
     height: 180,
@@ -93,6 +122,7 @@ const styles = StyleSheet.create({
     top: -40,
     width: 180,
   },
+
   backgroundBlob: {
     borderRadius: 999,
     bottom: 12,
