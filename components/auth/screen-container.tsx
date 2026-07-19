@@ -1,21 +1,39 @@
-import { ReactNode } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ReactNode } from "react";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { useAuthTheme } from '@/hooks/use-auth-theme';
+import { useAuthTheme } from "@/hooks/use-auth-theme";
 
 type ScreenContainerProps = {
   children: ReactNode;
   scrollable?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  topRight?: ReactNode;
 };
 
-export function ScreenContainer({ children, scrollable = false, contentStyle }: ScreenContainerProps) {
+export function ScreenContainer({
+  children,
+  scrollable = false,
+  contentStyle,
+  topRight,
+}: ScreenContainerProps) {
   const theme = useAuthTheme();
 
   const content = scrollable ? (
     <ScrollView
-      contentContainerStyle={[styles.scrollContent, { backgroundColor: theme.background }, contentStyle]}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { backgroundColor: theme.background },
+        contentStyle,
+      ]}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
@@ -28,10 +46,32 @@ export function ScreenContainer({ children, scrollable = false, contentStyle }: 
   );
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
-      <View style={[styles.backgroundGlow, { backgroundColor: theme.glow }]} />
-      <View style={[styles.backgroundBlob, { backgroundColor: theme.surfaceSoft }]} />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: theme.background }]}
+    >
+      <View
+        pointerEvents="none"
+        style={[styles.backgroundGlow, { backgroundColor: theme.glow }]}
+      />
+
+      <View
+        pointerEvents="none"
+        style={[
+          styles.backgroundBlob,
+          { backgroundColor: theme.surfaceSoft },
+        ]}
+      />
+
+      {topRight ? (
+        <View pointerEvents="box-none" style={styles.topRight}>
+          {topRight}
+        </View>
+      ) : null}
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.flex}
+      >
         {content}
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -42,40 +82,53 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+
   flex: {
     flex: 1,
   },
+
   scrollContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 20,
   },
+
   staticContent: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: 20,
     paddingVertical: 20,
   },
+
   contentWidth: {
-    alignSelf: 'center',
+    alignSelf: "center",
     maxWidth: 560,
-    width: '100%',
+    width: "100%",
   },
+
+  topRight: {
+    position: "absolute",
+    right: 18,
+    top: 12,
+    zIndex: 20,
+  },
+
   backgroundGlow: {
     borderRadius: 999,
     height: 180,
-    position: 'absolute',
+    position: "absolute",
     right: -60,
     top: -40,
     width: 180,
   },
+
   backgroundBlob: {
     borderRadius: 999,
     bottom: 12,
     height: 220,
     left: -100,
-    position: 'absolute',
+    position: "absolute",
     width: 220,
   },
 });

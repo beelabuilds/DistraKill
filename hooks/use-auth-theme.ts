@@ -1,7 +1,7 @@
-import { AuthPalette } from '@/constants/auth-theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useAppTheme } from '@/contexts/theme-context';
 
 export function useAuthTheme() {
-  const scheme = useColorScheme() ?? 'light';
-  return AuthPalette[scheme === 'dark' ? 'dark' : 'light'];
+  const { theme } = useAppTheme();
+
+  return theme;
 }

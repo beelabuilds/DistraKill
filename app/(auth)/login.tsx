@@ -1,15 +1,17 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Link, useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { Link, useRouter } from "expo-router";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { AuthInput } from '@/components/auth/auth-input';
-import { PasswordInput } from '@/components/auth/password-input';
-import { PrimaryButton } from '@/components/auth/primary-button';
-import { ScreenContainer } from '@/components/auth/screen-container';
-import { Radius, Spacing, Typography } from '@/constants/auth-theme';
-import { useAuth } from '@/contexts/auth-context';
-import { isValidEmail } from '@/utils/auth-validation';
+import { AuthInput } from "@/components/auth/auth-input";
+import { BackButton } from "@/components/auth/back-button";
+import { PasswordInput } from "@/components/auth/password-input";
+import { PrimaryButton } from "@/components/auth/primary-button";
+import { ScreenContainer } from "@/components/auth/screen-container";
+import { Radius, Spacing, Typography } from "@/constants/auth-theme";
+import { useAuth } from "@/contexts/auth-context";
+import { useAuthTheme } from "@/hooks/use-auth-theme";
+import { isValidEmail } from "@/utils/auth-validation";
 
 type LoginErrors = {
   email?: string;
@@ -19,9 +21,10 @@ type LoginErrors = {
 
 export default function LoginScreen() {
   const router = useRouter();
+  const theme = useAuthTheme();
   const { login } = useAuth();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<LoginErrors>({});
 
@@ -29,13 +32,13 @@ export default function LoginScreen() {
     const nextErrors: LoginErrors = {};
 
     if (!email.trim()) {
-      nextErrors.email = 'Email is required.';
+      nextErrors.email = "Email is required.";
     } else if (!isValidEmail(email)) {
-      nextErrors.email = 'Enter a valid email address.';
+      nextErrors.email = "Enter a valid email address.";
     }
 
     if (!password.trim()) {
-      nextErrors.password = 'Password is required.';
+      nextErrors.password = "Password is required.";
     }
 
     setErrors(nextErrors);
@@ -52,9 +55,9 @@ export default function LoginScreen() {
 
     try {
       await login(email.trim(), password);
-      router.replace('/home');
+      router.replace("/home");
     } catch {
-      setErrors({ form: 'Unable to sign in right now. Please try again.' });
+      setErrors({ form: "Unable to sign in right now. Please try again." });
     } finally {
       setLoading(false);
     }
@@ -62,19 +65,19 @@ export default function LoginScreen() {
 
   return (
     <ScreenContainer scrollable>
+      <BackButton fallbackHref="/welcome" />
       <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.kicker}>Welcome back</Text>
-          <Text style={styles.title}>Sign in to continue</Text>
-        </View>
-        <View style={styles.iconBubble}>
-          <Ionicons name="log-in-outline" size={24} color="#4F46E5" />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.kicker, { color: theme.secondary }]}>Welcome back</Text>
+          <Text style={[styles.title, { color: theme.text }]}>Sign in to continue</Text>
         </View>
       </View>
 
-      <Text style={styles.description}>Pick up where you left off and keep your focus tools ready in one place.</Text>
+      <Text style={[styles.description, { color: theme.textMuted }]}>
+        Pick up where you left off and keep your focus tools ready in one place.
+      </Text>
 
-      <View style={styles.formCard}>
+      <View style={[styles.formCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <AuthInput
           autoCapitalize="none"
           autoComplete="email"
@@ -93,20 +96,26 @@ export default function LoginScreen() {
           errorMessage={errors.password}
         />
 
-        <Pressable accessibilityRole="link" hitSlop={12} onPress={() => router.push('/forgot-password')}>
-          <Text style={styles.linkText}>Forgot password?</Text>
+        <Pressable
+          accessibilityRole="link"
+          hitSlop={12}
+          onPress={() => router.push("/forgot-password")}
+        >
+          <Text style={[styles.linkText, { color: theme.primary }]}>Forgot password?</Text>
         </Pressable>
 
-        {errors.form ? <Text style={styles.formError}>{errors.form}</Text> : null}
+        {errors.form ? (
+          <Text style={[styles.formError, { color: theme.error }]}>{errors.form}</Text>
+        ) : null}
 
         <PrimaryButton label="Login" loading={loading} onPress={handleLogin} />
       </View>
 
       <View style={styles.footerRow}>
-        <Text style={styles.footerText}>New here?</Text>
+        <Text style={[styles.footerText, { color: theme.textMuted }]}>New here?</Text>
         <Link href="/register" asChild>
           <Pressable accessibilityRole="link" hitSlop={10}>
-            <Text style={styles.footerLink}>Create account</Text>
+            <Text style={[styles.footerLink, { color: theme.primary }]}>Create account</Text>
           </Pressable>
         </Link>
       </View>
@@ -116,77 +125,58 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   headerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
     gap: Spacing.md,
   },
   kicker: {
-    color: '#6366F1',
     fontSize: Typography.caption,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 1,
-    marginBottom: Spacing.xs,
-    textTransform: 'uppercase',
+    marginBottom: Spacing.xs - 2,
+    textTransform: "uppercase",
   },
   title: {
-    color: '#16233D',
-    fontSize: Typography.title + 4,
-    fontWeight: '800',
+    fontSize: Typography.title + 2,
+    fontWeight: "800",
     letterSpacing: -0.5,
-    lineHeight: 34,
-  },
-  iconBubble: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(79, 70, 229, 0.12)',
-    borderRadius: Radius.pill,
-    height: 56,
-    justifyContent: 'center',
-    width: 56,
+    lineHeight: 30,
   },
   description: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
-    lineHeight: 23,
-    marginTop: Spacing.sm,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
+    marginTop: Spacing.xs,
   },
   formCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     gap: Spacing.md,
-    marginTop: Spacing.xl,
-    padding: Spacing.lg,
-    shadowColor: '#10213A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
+    marginTop: Spacing.lg,
+    padding: Spacing.md + 2,
+    borderWidth: 1,
   },
   linkText: {
-    color: '#4F46E5',
-    fontSize: Typography.body,
-    fontWeight: '700',
-    textAlign: 'right',
+    fontSize: Typography.label,
+    fontWeight: "700",
+    textAlign: "right",
+    paddingVertical: Spacing.xs,
   },
   formError: {
-    color: '#B42318',
-    fontSize: Typography.body,
-    lineHeight: 22,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
   },
   footerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
     gap: Spacing.xs,
-    marginTop: Spacing.lg,
+    marginTop: Spacing.md + 4,
   },
   footerText: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
+    fontSize: Typography.body - 1,
   },
   footerLink: {
-    color: '#4F46E5',
-    fontSize: Typography.body,
-    fontWeight: '800',
+    fontSize: Typography.body - 1,
+    fontWeight: "800",
   },
 });

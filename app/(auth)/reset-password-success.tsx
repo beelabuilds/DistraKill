@@ -2,9 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { BackButton } from '@/components/auth/back-button';
 import { PrimaryButton } from '@/components/auth/primary-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
+import { useAuthTheme } from '@/hooks/use-auth-theme';
 
 function getEmailFromParams(emailParam: string | string[] | undefined) {
   if (Array.isArray(emailParam)) {
@@ -16,30 +18,32 @@ function getEmailFromParams(emailParam: string | string[] | undefined) {
 
 export default function ResetPasswordSuccessScreen() {
   const router = useRouter();
+  const theme = useAuthTheme();
   const params = useLocalSearchParams<{ email?: string | string[] }>();
   const email = getEmailFromParams(params.email);
 
   return (
     <ScreenContainer scrollable>
-      <View style={styles.iconBubble}>
-        <Ionicons name="mail-open-outline" size={30} color="#14B8A6" />
+      <BackButton fallbackHref="/login" />
+      <View style={[styles.iconBubble, { backgroundColor: theme.surface }]}>
+        <Ionicons name="mail-open-outline" size={28} color={theme.primary} />
       </View>
 
-      <Text style={styles.title}>Check your inbox</Text>
-      <Text style={styles.description}>
+      <Text style={[styles.title, { color: theme.text }]}>Check your inbox</Text>
+      <Text style={[styles.description, { color: theme.textMuted }]}>
         {email ? `We sent reset instructions to ${email}.` : 'We sent reset instructions to your email address.'}
       </Text>
 
-      <View style={styles.card}
+      <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}
       >
-        <Text style={styles.cardTitle}>What happens next</Text>
-        <Text style={styles.cardText}>Open the link in your email, choose a new password, and then return to sign in.</Text>
+        <Text style={[styles.cardTitle, { color: theme.text }]}>What happens next</Text>
+        <Text style={[styles.cardText, { color: theme.textMuted }]}>Open the link in your email, choose a new password, and then return to sign in.</Text>
       </View>
 
       <PrimaryButton label="Back to Login" onPress={() => router.replace('/login')} />
 
       <Pressable accessibilityRole="link" hitSlop={10} onPress={() => router.replace('/login')}>
-        <Text style={styles.backLink}>Return to login</Text>
+        <Text style={[styles.backLink, { color: theme.primary }]}>Return to login</Text>
       </Pressable>
     </ScreenContainer>
   );
@@ -49,52 +53,42 @@ const styles = StyleSheet.create({
   iconBubble: {
     alignItems: 'center',
     alignSelf: 'center',
-    backgroundColor: 'rgba(20, 184, 166, 0.12)',
     borderRadius: Radius.pill,
-    height: 72,
+    height: 64,
     justifyContent: 'center',
-    width: 72,
+    width: 64,
   },
   title: {
-    color: '#16233D',
-    fontSize: Typography.title + 6,
+    fontSize: Typography.title + 4,
     fontWeight: '800',
     letterSpacing: -0.6,
-    marginTop: Spacing.xl,
+    marginTop: Spacing.lg,
     textAlign: 'center',
   },
   description: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
-    lineHeight: 24,
-    marginTop: Spacing.md,
+    fontSize: Typography.body - 1,
+    lineHeight: 22,
+    marginTop: Spacing.sm,
     textAlign: 'center',
   },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     gap: Spacing.xs,
-    marginTop: Spacing.xl,
-    padding: Spacing.lg,
-    shadowColor: '#10213A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
+    marginTop: Spacing.lg,
+    padding: Spacing.md + 2,
+    borderWidth: 1,
+    marginBottom: Spacing.lg,
   },
   cardTitle: {
-    color: '#16233D',
-    fontSize: Typography.body + 1,
+    fontSize: Typography.body,
     fontWeight: '800',
   },
   cardText: {
-    color: '#5D6B84',
-    fontSize: Typography.body,
-    lineHeight: 22,
+    fontSize: Typography.body - 1,
+    lineHeight: 20,
   },
   backLink: {
-    color: '#4F46E5',
-    fontSize: Typography.body,
+    fontSize: Typography.body - 1,
     fontWeight: '800',
     marginTop: Spacing.lg,
     textAlign: 'center',
