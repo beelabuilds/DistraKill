@@ -1,7 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  updateDoc,
+} from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
@@ -10,93 +19,219 @@ import {
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
+import { db } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
+import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 
 type StudyTask = {
   id: string;
   title: string;
   completed: boolean;
+  createdAt: number;
 };
 
 export default function StudyPlannerScreen() {
   const theme = useAuthTheme();
   const router = useRouter();
+  const { user } = useAuth();
+
+  const userId = user?.uid;
 
   const [taskTitle, setTaskTitle] = useState('');
   const [tasks, setTasks] = useState<StudyTask[]>([]);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true);
+  const [isAddingTask, setIsAddingTask] = useState(false);
+  const [taskError, setTaskError] = useState('');
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
-  // Create task
-  const addTask = () => {
-    const trimmedTitle = taskTitle.trim();
-
-    if (!trimmedTitle) {
+  /*
+   * Load this user's tasks from Firestore.
+   * The listener also receives changes automatically.
+   */
+  useEffect(() => {
+    if (!userId) {
+      setTasks([]);
+      setIsLoadingTasks(false);
       return;
     }
 
-    const newTask: StudyTask = {
-      id: Date.now().toString(),
-      title: trimmedTitle,
-      completed: false,
-    };
+    setIsLoadingTasks(true);
+    setTaskError('');
 
-    setTasks((currentTasks) => [...currentTasks, newTask]);
-    setTaskTitle('');
-  };
-
-  // Mark task complete or incomplete
-  const toggleTask = (taskId: string) => {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === taskId
-          ? { ...task, completed: !task.completed }
-          : task
-      )
-    );
-  };
-
-  // Delete task
-  const deleteTask = (taskId: string) => {
-    setTasks((currentTasks) =>
-      currentTasks.filter((task) => task.id !== taskId)
+    const tasksReference = collection(
+      db,
+      'users',
+      userId,
+      'tasks'
     );
 
-    if (editingTaskId === taskId) {
-      setEditingTaskId(null);
-      setEditingTitle('');
+    const unsubscribe = onSnapshot(
+      tasksReference,
+      (snapshot) => {
+        const loadedTasks: StudyTask[] = snapshot.docs.map(
+          (taskDocument) => {
+            const data = taskDocument.data();
+
+            return {
+              id: taskDocument.id,
+              title:
+                typeof data.title === 'string'
+                  ? data.title
+                  : 'Untitled task',
+              completed: Boolean(data.completed),
+              createdAt:
+                typeof data.createdAt === 'number'
+                  ? data.createdAt
+                  : 0,
+            };
+          }
+        );
+
+        loadedTasks.sort(
+          (firstTask, secondTask) =>
+            firstTask.createdAt - secondTask.createdAt
+        );
+
+        setTasks(loadedTasks);
+        setIsLoadingTasks(false);
+      },
+      (error) => {
+        console.error('Failed to load study tasks:', error);
+        setTaskError(
+          'Could not load your tasks. Check your connection and Firestore rules.'
+        );
+        setIsLoadingTasks(false);
+      }
+    );
+
+    return unsubscribe;
+  }, [userId]);
+
+  // Create a task in Firestore
+  const addTask = async () => {
+    const trimmedTitle = taskTitle.trim();
+
+    if (!userId || !trimmedTitle || isAddingTask) {
+      return;
+    }
+
+    try {
+      setIsAddingTask(true);
+      setTaskError('');
+
+      await addDoc(
+        collection(db, 'users', userId, 'tasks'),
+        {
+          title: trimmedTitle,
+          completed: false,
+          createdAt: Date.now(),
+        }
+      );
+
+      setTaskTitle('');
+    } catch (error) {
+      console.error('Failed to add task:', error);
+      setTaskError('The task could not be added.');
+    } finally {
+      setIsAddingTask(false);
     }
   };
 
-  // Start editing task
+  // Mark a task complete or incomplete
+  const toggleTask = async (task: StudyTask) => {
+    if (!userId) {
+      return;
+    }
+
+    try {
+      setTaskError('');
+
+      const taskReference = doc(
+        db,
+        'users',
+        userId,
+        'tasks',
+        task.id
+      );
+
+      await updateDoc(taskReference, {
+        completed: !task.completed,
+      });
+    } catch (error) {
+      console.error('Failed to update task:', error);
+      setTaskError('The task could not be updated.');
+    }
+  };
+
+  // Delete a task from Firestore
+  const deleteTask = async (taskId: string) => {
+    if (!userId) {
+      return;
+    }
+
+    try {
+      setTaskError('');
+
+      const taskReference = doc(
+        db,
+        'users',
+        userId,
+        'tasks',
+        taskId
+      );
+
+      await deleteDoc(taskReference);
+
+      if (editingTaskId === taskId) {
+        setEditingTaskId(null);
+        setEditingTitle('');
+      }
+    } catch (error) {
+      console.error('Failed to delete task:', error);
+      setTaskError('The task could not be deleted.');
+    }
+  };
+
+  // Open the task-editing input
   const startEditingTask = (task: StudyTask) => {
     setEditingTaskId(task.id);
     setEditingTitle(task.title);
   };
 
-  // Save edited task
-  const saveEditedTask = () => {
+  // Save the edited title in Firestore
+  const saveEditedTask = async () => {
     const trimmedTitle = editingTitle.trim();
 
-    if (!editingTaskId || !trimmedTitle) {
+    if (!userId || !editingTaskId || !trimmedTitle) {
       return;
     }
 
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === editingTaskId
-          ? { ...task, title: trimmedTitle }
-          : task
-      )
-    );
+    try {
+      setTaskError('');
 
-    setEditingTaskId(null);
-    setEditingTitle('');
+      const taskReference = doc(
+        db,
+        'users',
+        userId,
+        'tasks',
+        editingTaskId
+      );
+
+      await updateDoc(taskReference, {
+        title: trimmedTitle,
+      });
+
+      setEditingTaskId(null);
+      setEditingTitle('');
+    } catch (error) {
+      console.error('Failed to edit task:', error);
+      setTaskError('The edited task could not be saved.');
+    }
   };
 
-  // Cancel editing
   const cancelEditingTask = () => {
     setEditingTaskId(null);
     setEditingTitle('');
@@ -129,7 +264,7 @@ export default function StudyPlannerScreen() {
         streaks, and distribute assignments systematically.
       </Text>
 
-      {/* Task CRUD Card */}
+      {/* Firestore Task CRUD Card */}
       <View
         style={[
           styles.taskCard,
@@ -143,10 +278,17 @@ export default function StudyPlannerScreen() {
           Add Study Task
         </Text>
 
+        {!userId && (
+          <Text style={[styles.warningText, { color: theme.textMuted }]}>
+            Please sign in before adding study tasks.
+          </Text>
+        )}
+
         <TextInput
           value={taskTitle}
           onChangeText={setTaskTitle}
           onSubmitEditing={addTask}
+          editable={Boolean(userId) && !isAddingTask}
           placeholder="For example: Study chapter 3"
           placeholderTextColor={theme.textMuted}
           returnKeyType="done"
@@ -156,40 +298,89 @@ export default function StudyPlannerScreen() {
               backgroundColor: theme.inputBackground,
               borderColor: theme.border,
               color: theme.text,
+              opacity: userId ? 1 : 0.6,
             },
           ]}
         />
 
         <Pressable
           onPress={addTask}
+          disabled={
+            !userId ||
+            !taskTitle.trim() ||
+            isAddingTask
+          }
           style={({ pressed }) => [
             styles.addTaskButton,
             {
               backgroundColor: theme.primary,
-              opacity: pressed ? 0.8 : 1,
+              opacity:
+                !userId ||
+                !taskTitle.trim() ||
+                isAddingTask
+                  ? 0.5
+                  : pressed
+                    ? 0.8
+                    : 1,
             },
           ]}
         >
-          <Ionicons
-            name="add-circle-outline"
-            size={20}
-            color={theme.buttonText}
-          />
+          {isAddingTask ? (
+            <ActivityIndicator
+              size="small"
+              color={theme.buttonText}
+            />
+          ) : (
+            <>
+              <Ionicons
+                name="add-circle-outline"
+                size={20}
+                color={theme.buttonText}
+              />
 
-          <Text
-            style={[
-              styles.addTaskButtonText,
-              {
-                color: theme.buttonText,
-              },
-            ]}
-          >
-            Add Task
-          </Text>
+              <Text
+                style={[
+                  styles.addTaskButtonText,
+                  {
+                    color: theme.buttonText,
+                  },
+                ]}
+              >
+                Add Task
+              </Text>
+            </>
+          )}
         </Pressable>
 
-        {tasks.length === 0 ? (
-          <Text style={[styles.emptyText, { color: theme.textMuted }]}>
+        {taskError ? (
+          <Text style={styles.errorText}>
+            {taskError}
+          </Text>
+        ) : null}
+
+        {isLoadingTasks ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator
+              size="small"
+              color={theme.primary}
+            />
+
+            <Text
+              style={[
+                styles.loadingText,
+                { color: theme.textMuted },
+              ]}
+            >
+              Loading your tasks...
+            </Text>
+          </View>
+        ) : tasks.length === 0 ? (
+          <Text
+            style={[
+              styles.emptyText,
+              { color: theme.textMuted },
+            ]}
+          >
             No study tasks added yet.
           </Text>
         ) : (
@@ -247,7 +438,7 @@ export default function StudyPlannerScreen() {
               ) : (
                 <>
                   <Pressable
-                    onPress={() => toggleTask(task.id)}
+                    onPress={() => toggleTask(task)}
                     style={styles.iconButton}
                   >
                     <Ionicons
@@ -335,11 +526,21 @@ export default function StudyPlannerScreen() {
           </View>
 
           <View style={styles.focusContent}>
-            <Text style={[styles.focusTitle, { color: theme.text }]}>
+            <Text
+              style={[
+                styles.focusTitle,
+                { color: theme.text },
+              ]}
+            >
               Start Focus Session
             </Text>
 
-            <Text style={[styles.focusDescription, { color: theme.textMuted }]}>
+            <Text
+              style={[
+                styles.focusDescription,
+                { color: theme.textMuted },
+              ]}
+            >
               Begin a 25-minute distraction-free Pomodoro timer block now.
             </Text>
           </View>
@@ -382,7 +583,12 @@ export default function StudyPlannerScreen() {
           },
         ]}
       >
-        <Text style={[styles.cardTitle, { color: theme.text }]}>
+        <Text
+          style={[
+            styles.cardTitle,
+            { color: theme.text },
+          ]}
+        >
           Planner Overview
         </Text>
 
@@ -393,7 +599,12 @@ export default function StudyPlannerScreen() {
             color={theme.primary}
           />
 
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
+          <Text
+            style={[
+              styles.listText,
+              { color: theme.textMuted },
+            ]}
+          >
             Custom study intervals &amp; Pomodoro timer
           </Text>
         </View>
@@ -405,7 +616,12 @@ export default function StudyPlannerScreen() {
             color={theme.primary}
           />
 
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
+          <Text
+            style={[
+              styles.listText,
+              { color: theme.textMuted },
+            ]}
+          >
             Streak tracking &amp; motivational milestones
           </Text>
         </View>
@@ -417,7 +633,12 @@ export default function StudyPlannerScreen() {
             color={theme.primary}
           />
 
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
+          <Text
+            style={[
+              styles.listText,
+              { color: theme.textMuted },
+            ]}
+          >
             Daily productivity graphs &amp; analytical reports
           </Text>
         </View>
@@ -465,6 +686,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
+  warningText: {
+    fontSize: Typography.caption + 1,
+  },
+
   taskInput: {
     borderRadius: Radius.sm,
     borderWidth: 1,
@@ -488,9 +713,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  loadingContainer: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    justifyContent: 'center',
+    paddingVertical: Spacing.sm,
+  },
+
+  loadingText: {
+    fontSize: Typography.caption + 1,
+  },
+
   emptyText: {
     fontSize: Typography.caption + 1,
     marginTop: Spacing.xs,
+    textAlign: 'center',
+  },
+
+  errorText: {
+    color: '#D9534F',
+    fontSize: Typography.caption + 1,
+    lineHeight: 18,
     textAlign: 'center',
   },
 

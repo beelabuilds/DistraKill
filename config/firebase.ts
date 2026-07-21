@@ -3,12 +3,13 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: 'YOUR_REAL_API_KEY',
-  authDomain: 'YOUR_REAL_AUTH_DOMAIN',
-  projectId: 'YOUR_REAL_PROJECT_ID',
-  storageBucket: 'YOUR_REAL_STORAGE_BUCKET',
-  messagingSenderId: 'YOUR_REAL_MESSAGING_SENDER_ID',
-  appId: 'YOUR_REAL_APP_ID',
+  apiKey: 'AIzaSyDYhFE5gf9IlZIJxaVE9bcxFBmm-oYqh88',
+  authDomain: 'distrakill.firebaseapp.com',
+  projectId: 'distrakill',
+  storageBucket: 'distrakill.firebasestorage.app',
+  messagingSenderId: '526942721895',
+  appId: '1:526942721895:web:1e7d26bfe4f5481e7b41c2',
+  measurementId: 'G-QL2RSW9Q1E',
 };
 
 const firebaseApp =
