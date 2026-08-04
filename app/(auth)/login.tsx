@@ -55,8 +55,14 @@ export default function LoginScreen() {
     try {
       await login(email.trim(), password);
       router.replace("/home");
-    } catch {
-      setErrors({ form: "Unable to sign in right now. Please try again." });
+    } catch (error: any) {
+      console.log("Firebase Login Error:", error);
+      console.log("Code:", error.code);
+      console.log("Message:", error.message);
+
+      setErrors({
+        form: `${error.code}: ${error.message}`,
+      });
     } finally {
       setLoading(false);
     }
