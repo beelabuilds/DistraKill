@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
+import { Platform } from 'react-native';
 
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 
@@ -11,12 +12,37 @@ export default function TabLayout() {
       screenOptions={{
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.secondary,
+        tabBarShowLabel: false,
         tabBarStyle: {
+          // Floating positioning
+          position: 'absolute',
+          bottom: Platform.OS === 'ios' ? 24 : 16,
+          left: 20,
+          right: 20,
+
+          // Styling & Shape
           backgroundColor: theme.surface,
-          borderTopColor: theme.border,
-          borderTopWidth: 1,
-          elevation: 0,
-          shadowOpacity: 0,
+          borderRadius: 30,
+          height: 58,
+          borderTopWidth: 0,
+
+          borderWidth: 1,
+          paddingTop: 0,
+          paddingBottom: 0,
+          borderColor: theme.border,
+
+          elevation: 8,
+
+          shadowColor: '#000',
+          shadowOffset: {
+            width: 0,
+            height: 6,
+          },
+          shadowOpacity: 0.12,
+          shadowRadius: 10,
+        },
+        tabBarItemStyle: {
+          paddingVertical: 12,
         },
         headerShown: false,
       }}

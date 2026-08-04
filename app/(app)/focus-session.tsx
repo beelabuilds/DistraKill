@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, Pressable } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BackButton } from '@/components/auth/back-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -10,13 +9,14 @@ import { useAuthTheme } from '@/hooks/use-auth-theme';
 
 export default function FocusSessionScreen() {
   const theme = useAuthTheme();
-  const router = useRouter();
 
-  const [timeLeft, setTimeLeft] = useState(25 * 60); // 25 minutes in seconds
+  const [duration, setDuration] = useState(25); // in minutes
+  const [timeLeft, setTimeLeft] = useState(25 * 60); // in seconds
   const [isActive, setIsActive] = useState(false);
   const [sessionCount, setSessionCount] = useState(0);
+  const [focusMinutes, setFocusMinutes] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  
+
   const timerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -27,7 +27,8 @@ export default function FocusSessionScreen() {
     } else if (timeLeft === 0 && isActive) {
       setIsActive(false);
       setSessionCount((prev) => prev + 1);
-      setTimeLeft(25 * 60); // Reset timer
+      setFocusMinutes((prev) => prev + duration);
+      setTimeLeft(duration * 60); // Reset timer
       alert('Focus Session Completed! Take a short break.');
     }
 
@@ -36,7 +37,7 @@ export default function FocusSessionScreen() {
         clearInterval(timerRef.current);
       }
     };
-  }, [isActive, timeLeft]);
+  }, [isActive, timeLeft, duration]);
 
   const toggleTimer = () => {
     setIsActive(!isActive);
@@ -44,7 +45,20 @@ export default function FocusSessionScreen() {
 
   const resetTimer = () => {
     setIsActive(false);
-    setTimeLeft(25 * 60);
+    setTimeLeft(duration * 60);
+  };
+
+  const handleSelectDuration = (mins: number) => {
+    setIsActive(false);
+    setDuration(mins);
+    setTimeLeft(mins * 60);
+  };
+
+  const adjustDuration = (minsOffset: number) => {
+    setIsActive(false);
+    const newMins = Math.max(1, duration + minsOffset);
+    setDuration(newMins);
+    setTimeLeft(newMins * 60);
   };
 
   const formatTime = (seconds: number) => {
@@ -53,17 +67,17 @@ export default function FocusSessionScreen() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const progressPercentage = ((25 * 60 - timeLeft) / (25 * 60)) * 100;
+  const progressPercentage = duration > 0 ? ((duration * 60 - timeLeft) / (duration * 60)) * 100 : 0;
 
   return (
-    <ScreenContainer>
-      <BackButton fallbackHref="/study-planner" />
+    <ScreenContainer contentWidthStyle={{ flex: 1 }}>
+      <BackButton fallbackHref="/home" />
 
       <View style={styles.headerRow}>
         <View style={[styles.iconBubble, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <Ionicons name="hourglass" size={28} color={theme.primary} />
         </View>
-        <View>
+        <View style={styles.headerTitleContainer}>
           <Text style={[styles.title, { color: theme.text }]}>Focus Session</Text>
           <Text style={[styles.subtitle, { color: theme.textMuted }]}>
             Silence distractions and align your mind.
@@ -80,28 +94,73 @@ export default function FocusSessionScreen() {
           </Text>
           {/* Mock Progress Bar */}
           <View style={[styles.progressBarBackground, { backgroundColor: theme.inputBackground }]}>
-            <View 
+            <View
               style={[
-                styles.progressBarFill, 
-                { 
-                  backgroundColor: theme.primary, 
-                  width: `${progressPercentage}%` 
+                styles.progressBarFill,
+                {
+                  backgroundColor: theme.primary,
+                  width: `${progressPercentage}%`
                 }
-              ]} 
+              ]}
             />
           </View>
         </View>
 
+        {/* Dynamic Duration Pickers */}
+        <View style={styles.presetsRow}>
+          {[15, 25, 45, 60].map((mins) => {
+            const isSelected = duration === mins;
+            return (
+              <Pressable
+                key={mins}
+                disabled={isActive}
+                onPress={() => handleSelectDuration(mins)}
+                style={[
+                  styles.presetChip,
+                  {
+                    backgroundColor: isSelected ? theme.primary : theme.surfaceSoft,
+                    borderColor: theme.border,
+                    opacity: isActive ? 0.5 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.presetChipText, { color: isSelected ? theme.buttonText : theme.text }]}>
+                  {mins}m
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* Fine Tune Duration Adjustment */}
+        <View style={styles.adjustRow}>
+          <Pressable
+            disabled={isActive}
+            onPress={() => adjustDuration(-5)}
+            style={[styles.adjustBtn, { opacity: isActive ? 0.5 : 1 }]}
+          >
+            <Ionicons name="remove-circle-outline" size={24} color={theme.text} />
+          </Pressable>
+          <Text style={[styles.durationLabelText, { color: theme.text }]}>{duration} mins</Text>
+          <Pressable
+            disabled={isActive}
+            onPress={() => adjustDuration(5)}
+            style={[styles.adjustBtn, { opacity: isActive ? 0.5 : 1 }]}
+          >
+            <Ionicons name="add-circle-outline" size={24} color={theme.text} />
+          </Pressable>
+        </View>
+
         {/* Motivational prompt */}
         <Text style={[styles.motivationText, { color: theme.text }]}>
-          {isActive 
-            ? '“Concentrate all your thoughts upon the work at hand.”' 
+          {isActive
+            ? '“Concentrate all your thoughts upon the work at hand.”'
             : 'Ready to deep dive? Start the timer.'}
         </Text>
 
         {/* Action Controls */}
         <View style={styles.controlsRow}>
-          <Pressable 
+          <Pressable
             onPress={resetTimer}
             style={({ pressed }) => [
               styles.controlButton,
@@ -111,31 +170,31 @@ export default function FocusSessionScreen() {
             <Ionicons name="refresh-outline" size={24} color={theme.text} />
           </Pressable>
 
-          <Pressable 
+          <Pressable
             onPress={toggleTimer}
             style={({ pressed }) => [
               styles.playButton,
               { backgroundColor: theme.primary, opacity: pressed ? 0.8 : 1 }
             ]}
           >
-            <Ionicons 
-              name={isActive ? "pause" : "play"} 
-              size={32} 
-              color={theme.buttonText} 
+            <Ionicons
+              name={isActive ? "pause" : "play"}
+              size={32}
+              color={theme.buttonText}
             />
           </Pressable>
 
-          <Pressable 
+          <Pressable
             onPress={() => setSoundEnabled(!soundEnabled)}
             style={({ pressed }) => [
               styles.controlButton,
               { backgroundColor: theme.surface, borderColor: theme.border, opacity: pressed ? 0.8 : 1 }
             ]}
           >
-            <Ionicons 
-              name={soundEnabled ? "volume-medium-outline" : "volume-mute-outline"} 
-              size={24} 
-              color={theme.text} 
+            <Ionicons
+              name={soundEnabled ? "volume-medium-outline" : "volume-mute-outline"}
+              size={24}
+              color={theme.text}
             />
           </Pressable>
         </View>
@@ -148,7 +207,7 @@ export default function FocusSessionScreen() {
           </View>
           <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
           <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: theme.primary }]}>{sessionCount * 25}m</Text>
+            <Text style={[styles.statValue, { color: theme.primary }]}>{focusMinutes}m</Text>
             <Text style={[styles.statLabel, { color: theme.textMuted }]}>Focus Minutes</Text>
           </View>
         </View>
@@ -173,6 +232,9 @@ const styles = StyleSheet.create({
     width: 52,
     borderWidth: 1.5,
   },
+  headerTitleContainer: {
+    flex: 1,
+  },
   title: {
     fontSize: Typography.title,
     fontWeight: '800',
@@ -189,14 +251,14 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xl * 2,
   },
   timerCircle: {
-    width: 240,
-    height: 240,
-    borderRadius: 120,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
     borderWidth: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.xl,
-    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    //padding: Spacing.md,
   },
   timerText: {
     fontSize: Typography.display + 10,
@@ -220,19 +282,53 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: Radius.pill,
   },
+  presetsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  presetChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 60,
+  },
+  presetChipText: {
+    fontSize: Typography.caption + 1,
+    fontWeight: '700',
+  },
+  adjustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  adjustBtn: {
+    padding: Spacing.xs,
+  },
+  durationLabelText: {
+    fontSize: Typography.body,
+    fontWeight: '800',
+  },
   motivationText: {
-    fontSize: Typography.body - 1,
+    fontSize: Typography.body - 2,
     textAlign: 'center',
     fontStyle: 'italic',
     paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-    lineHeight: 22,
+    marginBottom: Spacing.md + 4,
+    lineHeight: 20,
   },
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.lg,
-    marginBottom: Spacing.xl * 1.5,
+    marginBottom: Spacing.lg + 4,
   },
   controlButton: {
     width: 56,
@@ -243,8 +339,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   playButton: {
-    width: 80,
-    height: 80,
+    width: 76,
+    height: 76,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',

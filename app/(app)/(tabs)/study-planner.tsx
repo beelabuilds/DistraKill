@@ -316,8 +316,8 @@ export default function StudyPlannerScreen() {
               backgroundColor: theme.primary,
               opacity:
                 !userId ||
-                !taskTitle.trim() ||
-                isAddingTask
+                  !taskTitle.trim() ||
+                  isAddingTask
                   ? 0.5
                   : pressed
                     ? 0.8
