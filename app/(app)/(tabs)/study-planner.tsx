@@ -1,158 +1,138 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
+import TaskInputForm from '@/components/TaskInputForm';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 
 export default function StudyPlannerScreen() {
   const theme = useAuthTheme();
-  const router = useRouter();
+  const [isFormActive, setIsFormActive] = useState(false);
 
   return (
-   <ScreenContainer scrollable>
-      <View
-        style={[
-          styles.iconBubble,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.border,
-          },
-        ]}
-      >
-        <Ionicons
-          name="calendar-outline"
-          size={28}
-          color={theme.primary}
-        />
-      </View>
+    <ScreenContainer scrollable>
+      {isFormActive ? (
+        <View style={styles.formContainer}>
+          <Pressable
+            onPress={() => setIsFormActive(false)}
+            style={({ pressed }) => [
+              styles.backHeaderBtn,
+              { backgroundColor: theme.surfaceSoft, borderColor: theme.border },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons name="arrow-back" size={16} color={theme.text} />
+            <Text style={[styles.backHeaderBtnText, { color: theme.text }]}>
+              Back to Planner Dashboard
+            </Text>
+          </Pressable>
 
-      <Text style={[styles.title, { color: theme.text }]}>
-        Smart Study Planner
-      </Text>
-
-      <Text style={[styles.description, { color: theme.textMuted }]}>
-        Organize your academic schedules, plan Pomodoro intervals, track active
-        streaks, and distribute assignments systematically.
-      </Text>
-
-      {/* Focus Session Integration Card */}
-      <Pressable
-        onPress={() => router.push('/focus-session' as never)}
-        style={({ pressed }) => [
-          styles.focusCard,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.primary,
-            opacity: pressed ? 0.9 : 1,
-            transform: [{ scale: pressed ? 0.98 : 1 }],
-          },
-        ]}
-      >
-        <View style={styles.focusHeader}>
+          <TaskInputForm
+            onCancel={() => setIsFormActive(false)}
+            onFormSubmit={(payload: any) => {
+              console.log('Generated study plan payload:', payload);
+            }}
+          />
+        </View>
+      ) : (
+        <>
           <View
             style={[
-              styles.focusIconBackground,
+              styles.iconBubble,
               {
-                backgroundColor: theme.inputBackground,
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
               },
             ]}
           >
             <Ionicons
-              name="hourglass"
-              size={24}
+              name="calendar-outline"
+              size={28}
               color={theme.primary}
             />
           </View>
 
-          <View style={styles.focusContent}>
-            <Text style={[styles.focusTitle, { color: theme.text }]}>
-              Start Focus Session
-            </Text>
+          <Text style={[styles.title, { color: theme.text }]}>
+            Smart Study Planner
+          </Text>
 
-            <Text style={[styles.focusDescription, { color: theme.textMuted }]}>
-              Begin a 25-minute distraction-free Pomodoro timer block now.
-            </Text>
-          </View>
-        </View>
+          <Text style={[styles.description, { color: theme.textMuted }]}>
+            Organize your academic schedules, plan Pomodoro intervals, track active
+            streaks, and distribute assignments systematically.
+          </Text>
 
-        <View
-          style={[
-            styles.focusActionButton,
-            {
-              backgroundColor: theme.primary,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.focusActionButtonText,
+          {/* CTA Create Study Plan Button */}
+          <Pressable
+            onPress={() => setIsFormActive(true)}
+            style={({ pressed }) => [
+              styles.createPlanBtn,
               {
-                color: theme.buttonText,
+                backgroundColor: theme.primary,
+              },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons name="sparkles-outline" size={18} color={theme.buttonText} />
+            <Text style={[styles.createPlanBtnText, { color: theme.buttonText }]}>
+              Create Custom Study Plan
+            </Text>
+          </Pressable>
+
+
+          <View
+            style={[
+              styles.placeholderCard,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
               },
             ]}
           >
-            Launch Timer
-          </Text>
+            <Text style={[styles.cardTitle, { color: theme.text }]}>
+              Planner Overview
+            </Text>
 
-          <Ionicons
-            name="arrow-forward"
-            size={16}
-            color={theme.buttonText}
-          />
-        </View>
-      </Pressable>
+            <View style={styles.listItem}>
+              <Ionicons
+                name="alarm-outline"
+                size={18}
+                color={theme.primary}
+              />
 
-      <View
-        style={[
-          styles.placeholderCard,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.border,
-          },
-        ]}
-      >
-        <Text style={[styles.cardTitle, { color: theme.text }]}>
-          Planner Overview
-        </Text>
+              <Text style={[styles.listText, { color: theme.textMuted }]}>
+                Custom study intervals &amp; Pomodoro timer
+              </Text>
+            </View>
 
-        <View style={styles.listItem}>
-          <Ionicons
-            name="alarm-outline"
-            size={18}
-            color={theme.primary}
-          />
+            <View style={styles.listItem}>
+              <Ionicons
+                name="hourglass-outline"
+                size={18}
+                color={theme.primary}
+              />
 
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
-            Custom study intervals &amp; Pomodoro timer
-          </Text>
-        </View>
+              <Text style={[styles.listText, { color: theme.textMuted }]}>
+                Streak tracking &amp; motivational milestones
+              </Text>
+            </View>
 
-        <View style={styles.listItem}>
-          <Ionicons
-            name="hourglass-outline"
-            size={18}
-            color={theme.primary}
-          />
+            <View style={styles.listItem}>
+              <Ionicons
+                name="stats-chart-outline"
+                size={18}
+                color={theme.primary}
+              />
 
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
-            Streak tracking &amp; motivational milestones
-          </Text>
-        </View>
-
-        <View style={styles.listItem}>
-          <Ionicons
-            name="stats-chart-outline"
-            size={18}
-            color={theme.primary}
-          />
-
-          <Text style={[styles.listText, { color: theme.textMuted }]}>
-            Daily productivity graphs &amp; analytical reports
-          </Text>
-        </View>
-      </View>
+              <Text style={[styles.listText, { color: theme.textMuted }]}>
+                Daily productivity graphs &amp; analytical reports
+              </Text>
+            </View>
+          </View>
+        </>
+      )}
+      <View style={{ height: 100 }} />
     </ScreenContainer>
   );
 }
@@ -181,13 +161,56 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginTop: Spacing.sm,
     textAlign: 'center',
+    marginBottom: Spacing.md,
+  },
+
+  formContainer: {
+    width: '100%',
+    gap: Spacing.md,
+  },
+
+  backHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.xs + 2,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+    marginBottom: Spacing.sm,
+  },
+
+  backHeaderBtnText: {
+    fontSize: Typography.caption + 1,
+    fontWeight: '700',
+  },
+
+  createPlanBtn: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    height: 52,
+    borderRadius: Radius.pill,
+    marginVertical: Spacing.md,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+
+  createPlanBtnText: {
+    fontSize: Typography.button,
+    fontWeight: '800',
   },
 
   focusCard: {
     borderRadius: Radius.md,
     borderWidth: 1.5,
     gap: Spacing.md,
-    marginTop: Spacing.xl,
+    marginTop: Spacing.sm,
     padding: Spacing.md,
   },
 
@@ -257,5 +280,10 @@ const styles = StyleSheet.create({
   listText: {
     flex: 1,
     fontSize: Typography.body - 1,
+  },
+
+  pressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
   },
 });

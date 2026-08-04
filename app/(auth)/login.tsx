@@ -1,4 +1,3 @@
-import { Ionicons } from "@expo/vector-icons";
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -83,11 +82,12 @@ export default function LoginScreen() {
           autoComplete="email"
           keyboardType="email-address"
           label="Email"
-          placeholder="student@school.edu"
+          placeholder="user@gmail.com"
           value={email}
           onChangeText={setEmail}
           errorMessage={errors.email}
         />
+        <View style={styles.passwordWrapper}></View>
         <PasswordInput
           label="Password"
           placeholder="Enter your password"
@@ -100,6 +100,7 @@ export default function LoginScreen() {
           accessibilityRole="link"
           hitSlop={12}
           onPress={() => router.push("/forgot-password")}
+          style={styles.forgotBtn}
         >
           <Text style={[styles.linkText, { color: theme.primary }]}>Forgot password?</Text>
         </Pressable>
@@ -178,5 +179,11 @@ const styles = StyleSheet.create({
   footerLink: {
     fontSize: Typography.body - 1,
     fontWeight: "800",
+  },
+  passwordWrapper: {
+    gap: Spacing.xs,
+  },
+  forgotBtn: {
+    alignSelf: "flex-end",
   },
 });

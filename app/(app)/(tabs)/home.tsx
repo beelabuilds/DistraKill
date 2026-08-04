@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View, Pressable } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { PrimaryButton } from '@/components/auth/primary-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
@@ -29,65 +28,36 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <Text style={[styles.sectionTitle, { color: theme.text }]}>Quick Access Hub</Text>
-      
+      {/* 📊 Academic Stats Row */}
+      <View style={styles.statsContainer}>
+        <View style={[styles.statCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Ionicons name="flame-outline" size={20} color="#FF6B6B" />
+          <Text style={[styles.statValue, { color: theme.text }]}>5 Days</Text>
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>Streak</Text>
+        </View>
+
+        <View style={[styles.statCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Ionicons name="time-outline" size={20} color={theme.primary} />
+          <Text style={[styles.statValue, { color: theme.text }]}>14.2 hrs</Text>
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>Studied</Text>
+        </View>
+
+        <View style={[styles.statCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Ionicons name="checkmark-done-circle-outline" size={20} color="#4ADE80" />
+          <Text style={[styles.statValue, { color: theme.text }]}>28</Text>
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>Tasks</Text>
+        </View>
+      </View>
+
+      <Text style={[styles.sectionTitle, { color: theme.text }]}>Daily Focus & Peace</Text>
+
       <View style={styles.gridContainer}>
-        {/* AI Assistant Quick Access */}
-        <Pressable 
-          style={({ pressed }) => [
-            styles.dashboardCard, 
-            { 
-              backgroundColor: theme.surface, 
-              borderColor: theme.border,
-              opacity: pressed ? 0.9 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }]
-            }
-          ]}
-          onPress={() => router.push('/ai-assistant')}
-        >
-          <View style={[styles.iconContainer, { backgroundColor: theme.inputBackground }]}>
-            <Ionicons name="sparkles" size={24} color={theme.primary} />
-          </View>
-          <View style={styles.cardContent}>
-            <Text style={[styles.cardTitle, { color: theme.text }]}>AI Assistant</Text>
-            <Text style={[styles.cardDesc, { color: theme.textMuted }]}>
-              Ask questions, summarize notes, and generate quizzes instantly.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.secondary} />
-        </Pressable>
-
-        {/* Study Planner Quick Access */}
-        <Pressable 
-          style={({ pressed }) => [
-            styles.dashboardCard, 
-            { 
-              backgroundColor: theme.surface, 
-              borderColor: theme.border,
-              opacity: pressed ? 0.9 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }]
-            }
-          ]}
-          onPress={() => router.push('/study-planner')}
-        >
-          <View style={[styles.iconContainer, { backgroundColor: theme.inputBackground }]}>
-            <Ionicons name="calendar" size={24} color={theme.primary} />
-          </View>
-          <View style={styles.cardContent}>
-            <Text style={[styles.cardTitle, { color: theme.text }]}>Study Planner</Text>
-            <Text style={[styles.cardDesc, { color: theme.textMuted }]}>
-              Manage schedules, track streaks, and start Pomodoro focus sessions.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.secondary} />
-        </Pressable>
-
         {/* Islamic Duaa Library Quick Access */}
-        <Pressable 
+        <Pressable
           style={({ pressed }) => [
-            styles.dashboardCard, 
-            { 
-              backgroundColor: theme.surface, 
+            styles.dashboardCard,
+            {
+              backgroundColor: theme.surface,
               borderColor: theme.border,
               opacity: pressed ? 0.9 : 1,
               transform: [{ scale: pressed ? 0.98 : 1 }]
@@ -106,7 +76,34 @@ export default function HomeScreen() {
           </View>
           <Ionicons name="chevron-forward" size={20} color={theme.secondary} />
         </Pressable>
+
+        {/* Focus Session Quick Access */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.dashboardCard,
+            {
+              backgroundColor: theme.surface,
+              borderColor: theme.border,
+              opacity: pressed ? 0.9 : 1,
+              transform: [{ scale: pressed ? 0.98 : 1 }]
+            }
+          ]}
+          onPress={() => router.push('/focus-session' as any)}
+        >
+          <View style={[styles.iconContainer, { backgroundColor: theme.inputBackground }]}>
+            <Ionicons name="hourglass" size={24} color={theme.primary} />
+          </View>
+          <View style={styles.cardContent}>
+            <Text style={[styles.cardTitle, { color: theme.text }]}>Focus Session</Text>
+            <Text style={[styles.cardDesc, { color: theme.textMuted }]}>
+              Start a 25-minute distraction-free Pomodoro timer block now.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.secondary} />
+        </Pressable>
       </View>
+
+      <View style={{ height: 100 }} />
     </ScreenContainer>
   );
 }
@@ -186,5 +183,26 @@ const styles = StyleSheet.create({
   logoutWrapper: {
     marginTop: Spacing.md,
     marginBottom: Spacing.xl,
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    gap: Spacing.xs + 2,
+    marginTop: Spacing.lg,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: Spacing.sm + 4,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    gap: 2,
+  },
+  statValue: {
+    fontSize: Typography.body,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  statLabel: {
+    fontSize: Typography.caption,
   },
 });

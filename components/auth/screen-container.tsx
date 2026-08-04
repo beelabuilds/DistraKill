@@ -16,6 +16,7 @@ type ScreenContainerProps = {
   children: ReactNode;
   scrollable?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  contentWidthStyle?: StyleProp<ViewStyle>;
   topRight?: ReactNode;
 };
 
@@ -23,6 +24,7 @@ export function ScreenContainer({
   children,
   scrollable = false,
   contentStyle,
+  contentWidthStyle,
   topRight,
 }: ScreenContainerProps) {
   const theme = useAuthTheme();
@@ -37,11 +39,11 @@ export function ScreenContainer({
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.contentWidth}>{children}</View>
+      <View style={[styles.contentWidth, contentWidthStyle]}>{children}</View>
     </ScrollView>
   ) : (
     <View style={[styles.staticContent, contentStyle]}>
-      <View style={styles.contentWidth}>{children}</View>
+      <View style={[styles.contentWidth, contentWidthStyle]}>{children}</View>
     </View>
   );
 
