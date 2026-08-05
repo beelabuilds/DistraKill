@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Link } from "expo-router";
 import { useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { HandDrawnHeader, ScatteredBackground } from "@/components/auth/background";
 import { PrimaryButton } from "@/components/auth/primary-button";
@@ -67,21 +67,20 @@ export default function WelcomeScreen() {
 
         </View>
 
-        {/* ℹ️ Floating Info Button at Bottom Right */}
+        {/* ℹ️ Floating Info Button at Bottom Left */}
         <Pressable
           style={({ pressed }) => [
             styles.infoFloatingBtn,
             {
-              backgroundColor: theme.primary,
-              borderColor: theme.primary,
-              //shadowColor: theme.text,
+              backgroundColor: theme.surface,
+              borderColor: theme.border,
             },
             pressed && { opacity: 0.8, transform: [{ scale: 0.95 }] },
           ]}
           onPress={() => setInfoVisible(true)}
           accessibilityLabel="About DistraKill"
         >
-          <Ionicons name="information-circle-outline" size={22} color={theme.background} />
+          <Ionicons name="information-circle-outline" size={24} color={theme.primary} />
         </Pressable>
 
         {/* 📄 About Modal */}
@@ -99,32 +98,98 @@ export default function WelcomeScreen() {
               style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
               onPress={(e) => e.stopPropagation()}
             >
-              <View style={styles.modalHeader}>
-                <View style={styles.modalTitleRow}>
-                  <Ionicons name="sparkles" size={18} color={theme.primary} />
-                  <Text style={[styles.modalTitle, { color: theme.text }]}>
-                    About Distra<Text style={{ color: theme.primary }}>Kill</Text>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.modalScrollContent}
+              >
+                {/* Header */}
+                <View style={styles.modalHeader}>
+                  <View style={styles.modalTitleRow}>
+                    <View style={[styles.iconBadge, { backgroundColor: theme.surfaceSoft }]}>
+                      <Ionicons name="sparkles" size={20} color={theme.primary} />
+                    </View>
+                    <View>
+                      <Text style={[styles.modalTitle, { color: theme.text }]}>
+                        About Distra<Text style={{ color: theme.primary }}>Kill</Text>
+                      </Text>
+                      <Text style={[styles.modalBadgeText, { color: theme.textMuted }]}>
+                        v1.0 • MAD Project
+                      </Text>
+                    </View>
+                  </View>
+                  <Pressable onPress={() => setInfoVisible(false)} hitSlop={10}>
+                    <Ionicons name="close-circle" size={24} color={theme.textMuted} />
+                  </Pressable>
+                </View>
+
+                {/* Purpose Paragraph */}
+                <Text style={[styles.modalPurpose, { color: theme.textMuted }]}>
+                  DistraKill is your ultimate student productivity companion built to eliminate digital distractions, optimize study flow, and foster consistent learning habits.
+                </Text>
+
+                {/* Feature Highlights */}
+                <Text style={[styles.sectionHeading, { color: theme.text }]}>Key Features</Text>
+
+                <View style={styles.featureGrid}>
+                  <View style={[styles.featureCardItem, { backgroundColor: theme.surfaceSoft, borderColor: theme.border }]}>
+                    <View style={[styles.featureIconBox, { backgroundColor: theme.primary + "20" }]}>
+                      <Ionicons name="shield-checkmark" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.featureTextCol}>
+                      <Text style={[styles.featureTitle, { color: theme.text }]}>Focus & App Blocker</Text>
+                      <Text style={[styles.featureSub, { color: theme.textMuted }]}>Block distracting apps and run timer-driven flow sessions.</Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.featureCardItem, { backgroundColor: theme.surfaceSoft, borderColor: theme.border }]}>
+                    <View style={[styles.featureIconBox, { backgroundColor: theme.primary + "20" }]}>
+                      <Ionicons name="calendar-outline" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.featureTextCol}>
+                      <Text style={[styles.featureTitle, { color: theme.text }]}>Smart Study Planner</Text>
+                      <Text style={[styles.featureSub, { color: theme.textMuted }]}>Plan tasks, schedule study routines, and manage exam deadlines.</Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.featureCardItem, { backgroundColor: theme.surfaceSoft, borderColor: theme.border }]}>
+                    <View style={[styles.featureIconBox, { backgroundColor: theme.primary + "20" }]}>
+                      <Ionicons name="hardware-chip-outline" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.featureTextCol}>
+                      <Text style={[styles.featureTitle, { color: theme.text }]}>AI Study Companion</Text>
+                      <Text style={[styles.featureSub, { color: theme.textMuted }]}>Get instant AI tutoring, topic explanations, and task breakdowns.</Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.featureCardItem, { backgroundColor: theme.surfaceSoft, borderColor: theme.border }]}>
+                    <View style={[styles.featureIconBox, { backgroundColor: theme.primary + "20" }]}>
+                      <Ionicons name="book-outline" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.featureTextCol}>
+                      <Text style={[styles.featureTitle, { color: theme.text }]}>Islamic Duaa Companion</Text>
+                      <Text style={[styles.featureSub, { color: theme.textMuted }]}>Authentic supplications for study focus, memory, and success.</Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.featureCardItem, { backgroundColor: theme.surfaceSoft, borderColor: theme.border }]}>
+                    <View style={[styles.featureIconBox, { backgroundColor: theme.primary + "20" }]}>
+                      <Ionicons name="flame-outline" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.featureTextCol}>
+                      <Text style={[styles.featureTitle, { color: theme.text }]}>Streaks & Habit Tracking</Text>
+                      <Text style={[styles.featureSub, { color: theme.textMuted }]}>Build daily study habits, maintain streaks, and level up.</Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Project Info Footer */}
+                <View style={[styles.projectFooter, { borderColor: theme.border }]}>
+                  <Ionicons name="school-outline" size={16} color={theme.primary} />
+                  <Text style={[styles.projectFooterText, { color: theme.textMuted }]}>
+                    Made with ❤️ by Salsabil & Madina
                   </Text>
                 </View>
-                <Pressable onPress={() => setInfoVisible(false)} hitSlop={10}>
-                  <Ionicons name="close-circle" size={22} color={theme.textMuted} />
-                </Pressable>
-              </View>
-
-              <Text style={[styles.modalPurpose, { color: theme.textMuted }]}>
-                DistraKill is designed specifically for students to minimize screen distractions, build productive study sessions, and track focus habits without cognitive overload.
-              </Text>
-
-              <View style={styles.featureList}>
-                <View style={styles.featureRow}>
-                  <Ionicons name="shield-checkmark-outline" size={16} color={theme.primary} />
-                  <Text style={[styles.featureText, { color: theme.text }]}>Block distracting apps during flow sessions</Text>
-                </View>
-                <View style={styles.featureRow}>
-                  <Ionicons name="time-outline" size={16} color={theme.primary} />
-                  <Text style={[styles.featureText, { color: theme.text }]}>Log study hours and keep daily streaks active</Text>
-                </View>
-              </View>
+              </ScrollView>
 
               <Pressable
                 style={({ pressed }) => [
@@ -134,7 +199,7 @@ export default function WelcomeScreen() {
                 ]}
                 onPress={() => setInfoVisible(false)}
               >
-                <Text style={styles.closeBtnText}>Got it</Text>
+                <Text style={[styles.closeBtnText, { color: theme.buttonText }]}>Got it</Text>
               </Pressable>
             </Pressable>
           </Pressable>
@@ -182,33 +247,6 @@ const styles = StyleSheet.create({
     fontSize: Typography.body - 1,
     lineHeight: 22,
   },
-  featureCard: {
-    borderRadius: Radius.md,
-    gap: Spacing.sm + 2,
-    marginTop: Spacing.lg,
-    padding: Spacing.md + 2,
-  },
-  featureRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  iconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  featureText: {
-    flex: 1,
-    fontSize: Typography.body - 1,
-    lineHeight: 20,
-  },
-  divider: {
-    height: 1,
-    width: "100%",
-  },
   actionGroup: {
     gap: Spacing.sm,
     marginTop: Spacing.lg,
@@ -231,9 +269,9 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: Spacing.md,
     left: 0,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
@@ -244,17 +282,23 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 40,
   },
   modalCard: {
     width: "100%",
-    borderRadius: Radius.md + 4,
+    maxHeight: "85%",
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    padding: Spacing.lg,
+    padding: Spacing.md + 4,
+    gap: Spacing.sm,
+  },
+  modalScrollContent: {
     gap: Spacing.md,
+    paddingBottom: Spacing.xs,
   },
   modalHeader: {
     flexDirection: "row",
@@ -264,19 +308,77 @@ const styles = StyleSheet.create({
   modalTitleRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: Spacing.sm,
+  },
+  iconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
   },
   modalTitle: {
-    fontSize: Typography.title,
+    fontSize: Typography.title - 2,
     fontWeight: "800",
   },
-  modalPurpose: {
-    fontSize: Typography.body - 1,
-    lineHeight: 22,
+  modalBadgeText: {
+    fontSize: Typography.caption,
+    fontWeight: "600",
+    marginTop: 1,
   },
-  featureList: {
+  modalPurpose: {
+    fontSize: Typography.body - 2,
+    lineHeight: 20,
+  },
+  sectionHeading: {
+    fontSize: Typography.label,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginTop: 4,
+  },
+  featureGrid: {
     gap: Spacing.xs + 2,
+  },
+  featureCardItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: Spacing.sm + 2,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    gap: Spacing.sm,
+  },
+  featureIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  featureTextCol: {
+    flex: 1,
+  },
+  featureTitle: {
+    fontSize: Typography.label,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  featureSub: {
+    fontSize: Typography.caption,
+    lineHeight: 16,
+  },
+  projectFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
     marginTop: Spacing.xs,
+  },
+  projectFooterText: {
+    fontSize: Typography.caption,
+    fontWeight: "600",
   },
   closeBtn: {
     height: 44,
@@ -286,8 +388,8 @@ const styles = StyleSheet.create({
     marginTop: Spacing.xs,
   },
   closeBtnText: {
-    color: "#FFFFFF",
     fontSize: Typography.body - 1,
     fontWeight: "700",
   },
 });
+
