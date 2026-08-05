@@ -1,30 +1,31 @@
+import '@/config/runtime-polyfills';
 import { Ionicons } from '@expo/vector-icons';
 import {
-    getAI,
-    getGenerativeModel,
-    GoogleAIBackend,
+  getAI,
+  getGenerativeModel,
+  GoogleAIBackend,
 } from 'firebase/ai';
 import {
-    addDoc,
-    collection,
-    deleteDoc,
-    doc,
-    onSnapshot,
-    updateDoc,
-    writeBatch,
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    useWindowDimensions,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -2141,7 +2142,7 @@ export default function StudyPlannerScreen() {
               ]}
             >
               <Ionicons name="add" size={18} color={theme.buttonText} />
-              <Text style={[styles.addPlanButtonText, { color: theme.buttonText }]}>Add Study Task</Text>
+              <Text style={[styles.addPlanButtonText, { color: theme.buttonText }]}>Add Study</Text>
             </Pressable>
           </View>
         </View>
@@ -2286,6 +2287,7 @@ export default function StudyPlannerScreen() {
                         borderColor: palette.border,
                         shadowColor: palette.accent,
                         left: labelColumnWidth + 12,
+                        right: 8,
                         opacity: task.completed ? 0.78 : pressed ? 0.94 : 1,
                       },
                     ]}
@@ -2301,13 +2303,13 @@ export default function StudyPlannerScreen() {
                               textDecorationLine: task.completed ? 'line-through' : 'none',
                             },
                           ]}
-                          numberOfLines={2}
+                          numberOfLines={1}
                         >
                           {task.title}
                         </Text>
 
                         <Text style={[styles.timelineTaskTime, { color: theme.textMuted }]} numberOfLines={1}>
-                          {getTaskTimeRange(task)}
+                          {task.subject ? `${task.subject} | ${getTaskTimeRange(task)}` : getTaskTimeRange(task)}
                         </Text>
                       </View>
 
@@ -3955,7 +3957,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: Spacing.md,
+    flexWrap: 'wrap',
+    gap: 12,
     padding: Spacing.md,
   },
   headerIcon: {
@@ -3969,6 +3972,7 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
     gap: 2,
+    minWidth: 180,
   },
   title: {
     fontSize: Typography.title + 1,
@@ -3984,12 +3988,13 @@ const styles = StyleSheet.create({
   addPlanButton: {
     alignItems: 'center',
     borderRadius: Radius.pill,
+    flex: 1,
     flexDirection: 'row',
     gap: 6,
     height: 42,
     justifyContent: 'center',
-    minWidth: 118,
-    paddingHorizontal: Spacing.md,
+    minWidth: 0,
+    paddingHorizontal: 8,
   },
   addPlanButtonText: {
     fontSize: Typography.button,
@@ -3999,16 +4004,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+    marginTop: 2,
+    width: '100%',
   },
   aiPlanButton: {
     alignItems: 'center',
     borderRadius: Radius.pill,
+    flex: 1,
     flexDirection: 'row',
     gap: 6,
     height: 42,
     justifyContent: 'center',
-    minWidth: 106,
-    paddingHorizontal: Spacing.md,
+    minWidth: 0,
+    paddingHorizontal: 8,
   },
   aiPlanButtonText: {
     color: '#F4F8FB',
@@ -4177,17 +4185,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     elevation: 2,
     justifyContent: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     position: 'absolute',
     shadowOpacity: 0.12,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
   },
   timelineTaskHeader: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
   },
   timelineAccent: {
     borderRadius: 999,
@@ -4197,17 +4205,17 @@ const styles = StyleSheet.create({
   },
   timelineTaskCopy: {
     flex: 1,
-    gap: 3,
+    gap: 0,
   },
   timelineTaskTitle: {
-    fontSize: Typography.body,
+    fontSize: Typography.body - 1,
     fontWeight: '800',
-    lineHeight: 20,
+    lineHeight: 18,
   },
   timelineTaskTime: {
-    fontSize: Typography.caption + 1,
+    fontSize: Typography.caption,
     fontWeight: '700',
-    lineHeight: 16,
+    lineHeight: 14,
   },
   taskStatusDot: {
     alignItems: 'center',
