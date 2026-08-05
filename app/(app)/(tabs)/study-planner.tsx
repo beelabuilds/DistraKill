@@ -28,7 +28,8 @@ import {
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
-import firebaseApp, { db } from '@/config/firebase';
+import { db } from '@/config/firebase';
+import aiFirebaseApp from '@/config/firebase-ai';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
@@ -92,6 +93,14 @@ type TaskFormState = {
   startTime: string;
   endTime: string;
 };
+type TaskDropdown =
+  | 'taskType'
+  | 'estimatedMinutes'
+  | 'priority'
+  | 'deadlineTime'
+  | 'preferredStartTime'
+  | 'preferredEndTime'
+  | null;
 type TaskAction = 'toggleComplete' | 'edit' | 'delete';
 type PickerMode = 'date' | 'startTime' | 'endTime' | null;
 type PlanningMode = 'single-day' | 'weekly';
@@ -145,12 +154,47 @@ const TIME_STEP_MINUTES = 15;
 const TIME_START_MINUTES = 6 * 60;
 const TIME_END_MINUTES = 23 * 60 + 45;
 const DEFAULT_AI_SESSION_LENGTH = 45;
-const AI_MODEL = getGenerativeModel(getAI(firebaseApp, { backend: new GoogleAIBackend() }), {
-model: 'gemini-3.6-flash',
+const AI_MODEL = getGenerativeModel(getAI(aiFirebaseApp, { backend: new GoogleAIBackend() }), {
+model: 'gemini-3.5-flash-lite',
 }, {
-  timeout: 60000,
+  timeout: 180000,
 });
 
+const TASK_TYPE_OPTIONS: {
+  value: TaskType;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { value: 'quiz', label: 'Quiz', icon: 'help-circle-outline' },
+  { value: 'assignment', label: 'Assignment', icon: 'document-text-outline' },
+  { value: 'exam', label: 'Exam', icon: 'school-outline' },
+  { value: 'report', label: 'Report', icon: 'reader-outline' },
+  { value: 'project', label: 'Project', icon: 'folder-open-outline' },
+  { value: 'presentation', label: 'Presentation', icon: 'easel-outline' },
+  { value: 'reading', label: 'Reading', icon: 'book-outline' },
+  { value: 'revision', label: 'Revision', icon: 'refresh-outline' },
+  { value: 'lab', label: 'Lab Work', icon: 'flask-outline' },
+  { value: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' },
+];
+
+const ESTIMATED_TIME_OPTIONS = [
+  { value: 30, label: '30 minutes' },
+  { value: 60, label: '1 hour' },
+  { value: 120, label: '2 hours' },
+  { value: 180, label: '3 hours' },
+  { value: 240, label: '4 hours' },
+  { value: 360, label: '6 hours' },
+  { value: 480, label: '8 hours' },
+];
+
+const PRIORITY_OPTIONS: {
+  value: TaskPriority;
+  label: string;
+}[] = [
+  { value: 'high', label: 'High priority' },
+  { value: 'medium', label: 'Medium priority' },
+  { value: 'low', label: 'Low priority' },
+];
 const AI_DAY_OPTIONS = [
   { value: 0, label: 'Sun' },
   { value: 1, label: 'Mon' },
@@ -336,40 +380,95 @@ function getPlanningDateBounds(mode: PlanningMode, form: AIStudyFormState) {
   };
 }
 
-function buildPlanningPrompt(mode: PlanningMode, form: AIStudyFormState) {
-  const subjects = normalizeSubjectsFromInput(form.subjectsInput);
-  const baseStructure = '{"sessions":[{"title":"Study Algebra","subject":"Mathematics","date":"2026-08-05","startTime":"16:00","endTime":"16:45"}]}' ;
+function buildPlanningPrompt(
+  mode: PlanningMode,
+  form: AIStudyFormState,
+  pendingTasks: StudyTask[],
+) {
+  const subjects = Array.from(
+    new Set(
+      pendingTasks
+        .map((task) => task.subject?.trim())
+        .filter(
+          (subject): subject is string =>
+            Boolean(subject),
+        ),
+    ),
+  );
+
+  const taskDetails = pendingTasks.map((task) => ({
+    taskId: task.id,
+    title: task.title,
+    subject: task.subject ?? 'General study',
+    taskType: task.taskType ?? 'other',
+    deadlineDate:
+      task.deadlineDate ?? 'No deadline date',
+    deadlineTime:
+      task.deadlineTime ?? '23:45',
+    estimatedMinutes:
+      task.estimatedMinutes ?? 60,
+    priority:
+      task.priority ?? 'medium',
+    preferredStartTime:
+      task.preferredStartTime ?? form.startTime,
+    preferredEndTime:
+      task.preferredEndTime ?? form.endTime,
+  }));
+
+  const baseStructure =
+    '{"sessions":[{"title":"Machine Learning Report","subject":"Machine Learning","date":"2026-08-05","startTime":"16:00","endTime":"16:45"}]}';
+
+  const sharedInstructions = [
+    'You are a study scheduling assistant.',
+    'Create study sessions only for the saved pending tasks provided below.',
+    'Return JSON only. Do not include Markdown, code fences, notes, or explanations.',
+    `Required JSON structure: ${baseStructure}`,
+    `Saved pending tasks: ${JSON.stringify(taskDetails, null, 2)}`,
+    `Use only these subjects: ${subjects.join(', ')}`,
+    'Use the exact saved task title for each generated session title.',
+    'Use the exact saved subject for each generated session subject.',
+    'Do not invent new tasks, titles, or subjects.',
+    'Give earlier deadlines and high-priority tasks more attention.',
+    'Split larger estimated study times across multiple sessions when necessary.',
+    'Do not schedule a task after its deadline.',
+    'Avoid overlapping study sessions.',
+    'Keep reasonable breaks between sessions.',
+    'Respect each task preferred study window when possible.',
+    `Each study session should normally be ${form.sessionLength} minutes.`,
+  ];
 
   if (mode === 'single-day') {
     return [
-      'You are planning a single day study schedule.',
-      'Return JSON only. Do not include Markdown, code fences, or explanations.',
-      `Required structure: ${baseStructure}`,
-      `Use exactly this date: ${form.studyDate}`,
-      `Use only these subjects or topics: ${subjects.join(', ')}`,
-      `Stay within these hours: ${form.startTime} to ${form.endTime}`,
-      `Respect the session length: ${form.sessionLength} minutes`,
-      'Avoid overlaps and keep reasonable breaks between sessions.',
-      form.instructions ? `Extra guidance: ${form.instructions}` : 'Extra guidance: keep the schedule practical and balanced.',
+      ...sharedInstructions,
+      'Create a single-day study schedule.',
+      `Use exactly this study date: ${form.studyDate}`,
+      `All sessions must stay between ${form.startTime} and ${form.endTime}.`,
+      form.instructions
+        ? `Extra guidance: ${form.instructions}`
+        : 'Extra guidance: create a practical and balanced schedule.',
     ].join('\n');
   }
 
   const selectedDays = form.studyDays
-    .map((dayValue) => AI_DAY_OPTIONS.find((option) => option.value === dayValue)?.label)
+    .map(
+      (dayValue) =>
+        AI_DAY_OPTIONS.find(
+          (option) => option.value === dayValue,
+        )?.label,
+    )
     .filter(Boolean)
     .join(', ');
 
   return [
-    'You are planning a weekly study schedule.',
-    'Return JSON only. Do not include Markdown, code fences, or explanations.',
-    `Required structure: ${baseStructure}`,
-    `Stay inside this date range: ${form.startDate} to ${form.endDate}`,
-    `Use only these weekdays: ${selectedDays || 'Mon, Tue, Wed, Thu, Fri'}`,
-    `Use only these subjects or topics: ${subjects.join(', ')}`,
-    `Stay within these hours: ${form.startTime} to ${form.endTime}`,
-    `Respect the session length: ${form.sessionLength} minutes`,
-    'Distribute subjects sensibly, avoid overlaps, and keep reasonable breaks between sessions.',
-    form.instructions ? `Extra guidance: ${form.instructions}` : 'Extra guidance: keep the schedule practical and balanced.',
+    ...sharedInstructions,
+    'Create a weekly study schedule.',
+    `Use dates from ${form.startDate} to ${form.endDate}.`,
+    `Use only these weekdays: ${selectedDays || 'Mon, Tue, Wed, Thu, Fri'}.`,
+    `Each day's sessions must stay between ${form.startTime} and ${form.endTime}.`,
+    'Distribute the estimated study time across the available days.',
+    form.instructions
+      ? `Extra guidance: ${form.instructions}`
+      : 'Extra guidance: create a practical and balanced weekly schedule.',
   ].join('\n');
 }
 
@@ -490,26 +589,103 @@ if (isValid && normalizedSessionDate) {
 }
 
 function getAiServiceErrorMessage(error: unknown) {
-  const errorCode = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: string }).code ?? '') : '';
-  const errorMessage = typeof error === 'object' && error !== null && 'message' in error ? String((error as { message?: string }).message ?? '') : String(error);
+  const errorCode =
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error
+      ? String(
+          (error as { code?: string }).code ?? '',
+        )
+      : '';
 
-  if (errorCode === 'api-not-enabled' || errorCode === 'no-api-key' || errorCode === 'no-app-id' || errorCode === 'no-project-id') {
-    return 'AI service is not configured.';
+  const errorMessage =
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error
+      ? String(
+          (error as { message?: string }).message ??
+            '',
+        )
+      : String(error);
+
+  const fullError =
+    [errorCode, errorMessage]
+      .filter(Boolean)
+      .join(' - ');
+
+  const shortError =
+    fullError.length > 260
+      ? fullError.slice(0, 260) + '...'
+      : fullError;
+
+  if (
+    /app.?check|unauthenticated|unauthorized|forbidden|permission|401|403/i.test(
+      fullError,
+    )
+  ) {
+    return (
+      'Firebase App Check blocked the request. ' +
+      shortError
+    );
   }
 
-  if (errorCode === 'deadline-exceeded' || /timeout/i.test(errorMessage)) {
-    return 'The request took too long. Please try again.';
+  if (
+    /api.?not.?enabled|api-not-enabled/i.test(
+      fullError,
+    )
+  ) {
+    return (
+      'Firebase AI Logic API is not enabled. ' +
+      shortError
+    );
   }
 
-  if (errorCode === 'fetch-error' || errorCode === 'request-error' || errorCode === 'response-error' || /network|connect|fetch/i.test(errorMessage)) {
-    return 'Could not connect to the AI service.';
+  if (
+    /model.*not.*found|not found|404/i.test(
+      fullError,
+    )
+  ) {
+    return (
+      'The selected Gemini model is unavailable. ' +
+      shortError
+    );
   }
 
-  if (errorCode === 'parse-failed' || errorCode === 'invalid-content' || /JSON|parse/i.test(errorMessage)) {
-    return 'The AI returned an invalid schedule.';
+  if (
+    /quota|rate.?limit|resource-exhausted|429/i.test(
+      fullError,
+    )
+  ) {
+    return (
+      'Firebase AI quota was exceeded. ' +
+      shortError
+    );
   }
 
-  return errorMessage || 'Could not connect to the AI service.';
+  if (
+    /timeout|deadline-exceeded/i.test(fullError)
+  ) {
+    return (
+      'The AI request took too long. ' +
+      shortError
+    );
+  }
+
+  if (
+    /network|connect|fetch|request-error|response-error/i.test(
+      fullError,
+    )
+  ) {
+    return (
+      'AI connection error: ' +
+      (shortError || 'Unknown connection error')
+    );
+  }
+
+  return (
+    'AI request failed: ' +
+    (shortError || 'Unknown error')
+  );
 }
 
 function parseDateInput(value: string) {
@@ -867,8 +1043,14 @@ export default function StudyPlannerScreen() {
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [screenError, setScreenError] = useState('');
   const [formError, setFormError] = useState('');
-  const [showTaskFormModal, setShowTaskFormModal] = useState(false);
+
+  const [showTaskFormModal, setShowTaskFormModal] =
+  useState(false);
+
+  const [activeTaskDropdown, setActiveTaskDropdown] =
+  useState<TaskDropdown>(null);
   const [showTaskActionsModal, setShowTaskActionsModal] = useState(false);
+
   const [activePicker, setActivePicker] = useState<PickerMode>(null);
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>('task-form');
   const [calendarMonth, setCalendarMonth] = useState(() => startOfDay(new Date()));
@@ -937,8 +1119,67 @@ export default function StudyPlannerScreen() {
               typeof data.dueDate === 'string' || typeof data.dueDate === 'number'
                 ? data.dueDate
                 : null,
-            startTime: typeof data.startTime === 'string' ? data.startTime : null,
-            endTime: typeof data.endTime === 'string' ? data.endTime : null,
+            startTime:
+              typeof data.startTime === 'string'
+                ? data.startTime
+                : null,
+
+            endTime:
+              typeof data.endTime === 'string'
+                ? data.endTime
+                : null,
+
+            kind:
+              data.kind === 'task' || data.kind === 'session'
+                ? data.kind
+                : null,
+
+            subject:
+              typeof data.subject === 'string'
+                ? data.subject
+                : null,
+
+            taskType:
+              typeof data.taskType === 'string'
+                ? (data.taskType as TaskType)
+                : null,
+
+            deadlineDate:
+              typeof data.deadlineDate === 'string'
+                ? data.deadlineDate
+                : null,
+
+            deadlineTime:
+              typeof data.deadlineTime === 'string'
+                ? data.deadlineTime
+                : null,
+
+            estimatedMinutes:
+              typeof data.estimatedMinutes === 'number'
+                ? data.estimatedMinutes
+                : null,
+
+            priority:
+              data.priority === 'high' ||
+              data.priority === 'medium' ||
+              data.priority === 'low'
+                ? data.priority
+                : null,
+
+            preferredStartTime:
+              typeof data.preferredStartTime === 'string'
+                ? data.preferredStartTime
+                : null,
+
+            preferredEndTime:
+              typeof data.preferredEndTime === 'string'
+                ? data.preferredEndTime
+                : null,
+
+            source:
+              data.source === 'manual' || data.source === 'ai'
+                ? data.source
+                : null,
           };
         });
 
@@ -978,6 +1219,48 @@ export default function StudyPlannerScreen() {
       });
   }, [selectedDate, tasks]);
 
+  const pendingStudyTasks = useMemo(() => {
+    return tasks
+      .filter(
+        (task) =>
+          task.kind === 'task' &&
+          !task.completed,
+      )
+      .sort((firstTask, secondTask) => {
+        const firstDeadline =
+          firstTask.deadlineDate ?? '9999-12-31';
+
+        const secondDeadline =
+          secondTask.deadlineDate ?? '9999-12-31';
+
+        if (firstDeadline !== secondDeadline) {
+          return firstDeadline.localeCompare(
+            secondDeadline,
+          );
+        }
+
+        const priorityOrder: Record<
+          TaskPriority,
+          number
+        > = {
+          high: 0,
+          medium: 1,
+          low: 2,
+        };
+
+        const firstPriority =
+          firstTask.priority ?? 'medium';
+
+        const secondPriority =
+          secondTask.priority ?? 'medium';
+
+        return (
+          priorityOrder[firstPriority] -
+          priorityOrder[secondPriority]
+        );
+      });
+  }, [tasks]);
+
   const unscheduledTasks = useMemo(() => {
     return tasks
       .filter((task) => !isTaskScheduled(task))
@@ -990,24 +1273,70 @@ export default function StudyPlannerScreen() {
     }
   }, [unscheduledTasks.length]);
 
+  const selectedTaskTypeOption =
+    TASK_TYPE_OPTIONS.find(
+      (option) => option.value === taskForm.taskType,
+    );
+
+  const selectedTaskTypeLabel =
+    selectedTaskTypeOption?.label ?? 'Select task type';
+
+  const selectedTaskTypeIcon =
+    selectedTaskTypeOption?.icon ??
+    'document-text-outline';
+
+  const selectedEstimatedTimeLabel =
+    ESTIMATED_TIME_OPTIONS.find(
+      (option) =>
+        option.value === taskForm.estimatedMinutes,
+    )?.label ?? 'Select estimated time';
+
+  const selectedPriorityLabel =
+    PRIORITY_OPTIONS.find(
+      (option) => option.value === taskForm.priority,
+    )?.label ?? 'Select priority';
+
   const selectedDayLabel = useMemo(() => formatLongDay(selectedDate), [selectedDate]);
 
   const dateFieldLabel = useMemo(() => {
-    const parsedDate = parseDateInput(taskForm.date);
+    const parsedDate =
+      parseDateInput(taskForm.deadlineDate);
 
-    return parsedDate ? formatReadableDate(parsedDate) : 'Select date';
-  }, [taskForm.date]);
+    return parsedDate
+      ? formatReadableDate(parsedDate)
+      : 'Select deadline date';
+  }, [taskForm.deadlineDate]);
 
-  const startTimeOptions = useMemo(() => TIME_OPTIONS, []);
-
-  const endTimeOptions = useMemo(
-    () => getTimeOptionsAfter(taskForm.startTime),
-    [taskForm.startTime],
+  const startTimeOptions = useMemo(
+    () => TIME_OPTIONS,
+    [],
   );
 
-  const activeTimeOptions = activePicker === 'startTime' ? startTimeOptions : endTimeOptions;
+  const isAIFormPicker =
+    pickerTarget !== 'task-form';
 
-  const activeTimeFieldValue = activePicker === 'startTime' ? taskForm.startTime : taskForm.endTime;
+  const pickerStartTime = isAIFormPicker
+    ? aiPlanForm.startTime
+    : taskForm.startTime;
+
+  const pickerEndTime = isAIFormPicker
+    ? aiPlanForm.endTime
+    : taskForm.endTime;
+
+  const endTimeOptions = useMemo(
+    () => getTimeOptionsAfter(pickerStartTime),
+    [pickerStartTime],
+  );
+
+  const activeTimeOptions =
+    activePicker === 'startTime'
+      ? startTimeOptions
+      : endTimeOptions;
+
+  const activeTimeFieldValue =
+    activePicker === 'startTime'
+      ? pickerStartTime
+      : pickerEndTime;
 
   const activePickerTitle =
     activePicker === 'date' ? 'Select Date' : activePicker === 'startTime' ? 'Select Start Time' : 'Select End Time';
@@ -1021,16 +1350,43 @@ export default function StudyPlannerScreen() {
 
     setEditingTaskId(null);
     setFormError('');
+    setActiveTaskDropdown(null);
     setTaskForm(getTaskFormDefaults(selectedDate));
     setCalendarMonth(selectedDate);
     setActivePicker(null);
+    setPickerTarget('task-form');
     setShowTaskFormModal(true);
   };
 
   const openAIPlannerModal = () => {
+    if (pendingStudyTasks.length === 0) {
+      setScreenError(
+        'Add at least one pending study task before generating a plan.',
+      );
+      return;
+    }
+
+    const subjects = Array.from(
+      new Set(
+        pendingStudyTasks
+          .map((task) => task.subject?.trim())
+          .filter(
+            (subject): subject is string =>
+              Boolean(subject),
+          ),
+      ),
+    );
+
+    const nextForm =
+      getAiDefaultForm(selectedDate);
+
+    nextForm.subjectsInput =
+      subjects.join(', ');
+
+    setScreenError('');
     setAIPlanError('');
     setAIPlanSessions([]);
-    setAIPlanForm(getAiDefaultForm(selectedDate));
+    setAIPlanForm(nextForm);
     setPlanningMode('single-day');
     setCalendarMonth(selectedDate);
     setActivePicker(null);
@@ -1045,6 +1401,8 @@ export default function StudyPlannerScreen() {
 
     setShowTaskFormModal(false);
     setActivePicker(null);
+    setActiveTaskDropdown(null);
+    setPickerTarget('task-form');
     setFormError('');
     setEditingTaskId(null);
     setTaskForm(getTaskFormDefaults(selectedDate));
@@ -1062,7 +1420,7 @@ export default function StudyPlannerScreen() {
 
     if (mode === 'date') {
       const parsedDate = target === 'task-form'
-        ? parseDateInput(taskForm.date) ?? selectedDate
+        ? parseDateInput(taskForm.deadlineDate) ?? selectedDate
         : target === 'ai-start-date'
           ? parseDateInput(aiPlanForm.startDate) ?? selectedDate
           : target === 'ai-end-date'
@@ -1095,9 +1453,11 @@ export default function StudyPlannerScreen() {
     } else {
       setTaskForm((currentValue) => ({
         ...currentValue,
+        deadlineDate: formatDateInput(date),
         date: formatDateInput(date),
       }));
     }
+
     setCalendarMonth(date);
     setActivePicker(null);
   };
@@ -1156,13 +1516,18 @@ export default function StudyPlannerScreen() {
   };
 
   const openEditTaskModal = (task: StudyTask) => {
-    const taskDate = getStoredTaskDate(task) ?? selectedDate;
+    const taskDate =
+      parseDateInput(task.deadlineDate ?? '') ??
+      getStoredTaskDate(task) ??
+      selectedDate;
 
     setEditingTaskId(task.id);
     setFormError('');
+    setActiveTaskDropdown(null);
     setTaskForm(getTaskFormDefaults(taskDate, task));
     setCalendarMonth(taskDate);
     setActivePicker(null);
+    setPickerTarget('task-form');
     setShowTaskFormModal(true);
   };
 
@@ -1215,7 +1580,6 @@ export default function StudyPlannerScreen() {
     }
 
     const subjects = normalizeSubjectsFromInput(aiPlanForm.subjectsInput);
-    const requiredSubjectSet = new Set(subjects.map(normalizeSubject));
     const modeLabel = planningMode === 'single-day' ? 'single-day' : 'weekly';
     const requestStartedAt = Date.now();
 
@@ -1253,11 +1617,15 @@ export default function StudyPlannerScreen() {
       setAIPlanError('');
 
       const response = await AI_MODEL.generateContent({
-        contents: [{ role: 'user', parts: [{ text: buildPlanningPrompt(planningMode, aiPlanForm) }] }],
+        contents: [{ role: 'user', parts: [{ text: buildPlanningPrompt(
+              planningMode,
+              aiPlanForm,
+              pendingStudyTasks,
+            ) }] }],
         generationConfig: {
           responseMimeType: 'application/json',
           temperature: 0.3,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 1024,
         },
       });
 
@@ -1373,6 +1741,7 @@ export default function StudyPlannerScreen() {
           startTime: normalizeTimeInput(session.startTime) || session.startTime,
           endTime: normalizeTimeInput(session.endTime) || session.endTime,
           source: 'ai',
+          kind: 'session',
           planningMode,
         });
       });
@@ -1392,35 +1761,62 @@ export default function StudyPlannerScreen() {
 
   const validateTaskForm = () => {
     const trimmedTitle = taskForm.title.trim();
-    const normalizedDate = parseDateInput(taskForm.date);
-    const normalizedStartTime = normalizeTimeInput(taskForm.startTime);
-    const normalizedEndTime = normalizeTimeInput(taskForm.endTime);
+    const trimmedSubject = taskForm.subject.trim();
+
+    const normalizedDeadlineDate =
+      parseDateInput(taskForm.deadlineDate);
+
+    const normalizedDeadlineTime =
+      normalizeTimeInput(taskForm.deadlineTime);
+
+    const normalizedPreferredStart =
+      normalizeTimeInput(taskForm.preferredStartTime);
+
+    const normalizedPreferredEnd =
+      normalizeTimeInput(taskForm.preferredEndTime);
 
     if (!trimmedTitle) {
       return 'Task title cannot be empty.';
     }
 
-    if (!normalizedDate) {
-      return 'Date is required.';
+    if (!trimmedSubject) {
+      return 'Subject cannot be empty.';
     }
 
-    if (!normalizedStartTime) {
-      return 'Start time is required.';
+    if (!normalizedDeadlineDate) {
+      return 'Choose a valid deadline date.';
     }
 
-    if (!normalizedEndTime) {
-      return 'End time is required.';
+    if (!normalizedDeadlineTime) {
+      return 'Choose a valid deadline time.';
     }
-
-    const startMinutes = parseTimeToMinutes(normalizedStartTime);
-    const endMinutes = parseTimeToMinutes(normalizedEndTime);
 
     if (
-      startMinutes === null ||
-      endMinutes === null ||
-      endMinutes <= startMinutes
+      !Number.isFinite(taskForm.estimatedMinutes) ||
+      taskForm.estimatedMinutes <= 0
     ) {
-      return 'End time must be later than start time.';
+      return 'Choose the estimated study time.';
+    }
+
+    if (
+      !normalizedPreferredStart ||
+      !normalizedPreferredEnd
+    ) {
+      return 'Choose a valid preferred study window.';
+    }
+
+    const preferredStartMinutes =
+      parseTimeToMinutes(normalizedPreferredStart);
+
+    const preferredEndMinutes =
+      parseTimeToMinutes(normalizedPreferredEnd);
+
+    if (
+      preferredStartMinutes === null ||
+      preferredEndMinutes === null ||
+      preferredEndMinutes <= preferredStartMinutes
+    ) {
+      return 'Preferred end time must be later than start time.';
     }
 
     return null;
@@ -1438,12 +1834,27 @@ export default function StudyPlannerScreen() {
       return;
     }
 
-    const normalizedDate = parseDateInput(taskForm.date);
-    const normalizedStartTime = normalizeTimeInput(taskForm.startTime);
-    const normalizedEndTime = normalizeTimeInput(taskForm.endTime);
+    const deadlineDate =
+      parseDateInput(taskForm.deadlineDate);
 
-    if (!normalizedDate || !normalizedStartTime || !normalizedEndTime) {
-      setFormError('Please enter a valid date and time range.');
+    const deadlineTime =
+      normalizeTimeInput(taskForm.deadlineTime);
+
+    const preferredStartTime =
+      normalizeTimeInput(taskForm.preferredStartTime);
+
+    const preferredEndTime =
+      normalizeTimeInput(taskForm.preferredEndTime);
+
+    if (
+      !deadlineDate ||
+      !deadlineTime ||
+      !preferredStartTime ||
+      !preferredEndTime
+    ) {
+      setFormError(
+        'Please check the deadline and preferred study time.',
+      );
       return;
     }
 
@@ -1451,20 +1862,35 @@ export default function StudyPlannerScreen() {
       setIsSavingTask(true);
       setFormError('');
 
-      await addDoc(collection(db, 'users', userId, 'tasks'), {
-        title: taskForm.title.trim(),
-        completed: false,
-        createdAt: Date.now(),
-        date: formatDateInput(normalizedDate),
-        dueDate: formatDateInput(normalizedDate),
-        startTime: normalizedStartTime,
-        endTime: normalizedEndTime,
-      });
+      await addDoc(
+        collection(db, 'users', userId, 'tasks'),
+        {
+          kind: 'task',
+          title: taskForm.title.trim(),
+          subject: taskForm.subject.trim(),
+          taskType: taskForm.taskType,
+          deadlineDate: formatDateInput(deadlineDate),
+          deadlineTime,
+          dueDate: formatDateInput(deadlineDate),
+          estimatedMinutes: taskForm.estimatedMinutes,
+          priority: taskForm.priority,
+          preferredStartTime,
+          preferredEndTime,
+          completed: false,
+          createdAt: Date.now(),
+          source: 'manual',
+
+          // A pending task is not a scheduled session.
+          date: null,
+          startTime: null,
+          endTime: null,
+        },
+      );
 
       closeTaskFormModal();
     } catch (error) {
-      console.error('Failed to add task:', error);
-      setFormError('The task could not be added.');
+      console.error('Failed to add study task:', error);
+      setFormError('The study task could not be added.');
     } finally {
       setIsSavingTask(false);
     }
@@ -1482,12 +1908,27 @@ export default function StudyPlannerScreen() {
       return;
     }
 
-    const normalizedDate = parseDateInput(taskForm.date);
-    const normalizedStartTime = normalizeTimeInput(taskForm.startTime);
-    const normalizedEndTime = normalizeTimeInput(taskForm.endTime);
+    const deadlineDate =
+      parseDateInput(taskForm.deadlineDate);
 
-    if (!normalizedDate || !normalizedStartTime || !normalizedEndTime) {
-      setFormError('Please enter a valid date and time range.');
+    const deadlineTime =
+      normalizeTimeInput(taskForm.deadlineTime);
+
+    const preferredStartTime =
+      normalizeTimeInput(taskForm.preferredStartTime);
+
+    const preferredEndTime =
+      normalizeTimeInput(taskForm.preferredEndTime);
+
+    if (
+      !deadlineDate ||
+      !deadlineTime ||
+      !preferredStartTime ||
+      !preferredEndTime
+    ) {
+      setFormError(
+        'Please check the deadline and preferred study time.',
+      );
       return;
     }
 
@@ -1495,20 +1936,40 @@ export default function StudyPlannerScreen() {
       setIsSavingTask(true);
       setFormError('');
 
-      const taskReference = doc(db, 'users', userId, 'tasks', editingTaskId);
+      const taskReference = doc(
+        db,
+        'users',
+        userId,
+        'tasks',
+        editingTaskId,
+      );
 
       await updateDoc(taskReference, {
+        kind: 'task',
         title: taskForm.title.trim(),
-        date: formatDateInput(normalizedDate),
-        dueDate: formatDateInput(normalizedDate),
-        startTime: normalizedStartTime,
-        endTime: normalizedEndTime,
+        subject: taskForm.subject.trim(),
+        taskType: taskForm.taskType,
+        deadlineDate: formatDateInput(deadlineDate),
+        deadlineTime,
+        dueDate: formatDateInput(deadlineDate),
+        estimatedMinutes: taskForm.estimatedMinutes,
+        priority: taskForm.priority,
+        preferredStartTime,
+        preferredEndTime,
+        source: 'manual',
+
+        // Keep it in Pending Tasks until a schedule is generated.
+        date: null,
+        startTime: null,
+        endTime: null,
       });
 
       closeTaskFormModal();
     } catch (error) {
-      console.error('Failed to edit task:', error);
-      setFormError('The edited task could not be saved.');
+      console.error('Failed to edit study task:', error);
+      setFormError(
+        'The edited study task could not be saved.',
+      );
     } finally {
       setIsSavingTask(false);
     }
@@ -1604,7 +2065,40 @@ export default function StudyPlannerScreen() {
 
   const calendarWeeks = useMemo(() => getDaysInMonthGrid(calendarMonth), [calendarMonth]);
 
-  const selectedCalendarDate = parseDateInput(taskForm.date) ?? selectedDate;
+  const selectedCalendarDate = useMemo(() => {
+    if (pickerTarget === 'ai-study-date') {
+      return (
+        parseDateInput(aiPlanForm.studyDate) ??
+        selectedDate
+      );
+    }
+
+    if (pickerTarget === 'ai-start-date') {
+      return (
+        parseDateInput(aiPlanForm.startDate) ??
+        selectedDate
+      );
+    }
+
+    if (pickerTarget === 'ai-end-date') {
+      return (
+        parseDateInput(aiPlanForm.endDate) ??
+        selectedDate
+      );
+    }
+
+    return (
+      parseDateInput(taskForm.deadlineDate) ??
+      selectedDate
+    );
+  }, [
+    aiPlanForm.endDate,
+    aiPlanForm.startDate,
+    aiPlanForm.studyDate,
+    pickerTarget,
+    selectedDate,
+    taskForm.deadlineDate,
+  ]);
 
   return (
     <ScreenContainer scrollable contentWidthStyle={styles.pageWidth}>
@@ -1616,7 +2110,7 @@ export default function StudyPlannerScreen() {
 
           <View style={styles.headerCopy}>
             <Text style={[styles.title, { color: theme.text }]}>Study Planner</Text>
-            <Text style={[styles.subtitle, { color: theme.textMuted }]}>Plan your week and stay focused.</Text>
+            <Text style={[styles.subtitle, { color: theme.textMuted }]}>Add your deadlines, then generate a smart study schedule.</Text>
           </View>
 
           <View style={styles.headerActions}>
@@ -1632,7 +2126,7 @@ export default function StudyPlannerScreen() {
               ]}
             >
               <Ionicons name="sparkles" size={16} color="#F4F8FB" />
-              <Text style={styles.aiPlanButtonText}>AI Plan</Text>
+              <Text style={styles.aiPlanButtonText}>Generate Plan</Text>
             </Pressable>
 
             <Pressable
@@ -1647,7 +2141,7 @@ export default function StudyPlannerScreen() {
               ]}
             >
               <Ionicons name="add" size={18} color={theme.buttonText} />
-              <Text style={[styles.addPlanButtonText, { color: theme.buttonText }]}>Add Plan</Text>
+              <Text style={[styles.addPlanButtonText, { color: theme.buttonText }]}>Add Study Task</Text>
             </Pressable>
           </View>
         </View>
@@ -1728,7 +2222,7 @@ export default function StudyPlannerScreen() {
           <View style={styles.sectionHeaderRow}>
             <View>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>{selectedDayLabel}</Text>
-              <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>Daily schedule timeline</Text>
+              <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>Study Schedule</Text>
             </View>
 
             <View style={[styles.timelineBadge, { backgroundColor: theme.inputBackground, borderColor: theme.border }]}>
@@ -1751,16 +2245,16 @@ export default function StudyPlannerScreen() {
           ) : scheduledDayTasks.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="sparkles-outline" size={24} color={theme.primary} />
-              <Text style={[styles.emptyStateTitle, { color: theme.text }]}>No scheduled tasks yet</Text>
+              <Text style={[styles.emptyStateTitle, { color: theme.text }]}>Your schedule is clear</Text>
               <Text style={[styles.emptyStateCopy, { color: theme.textMuted }]}>Tap Add Plan to place a task into today’s timetable.</Text>
             </View>
           ) : (
-            <View style={[styles.timelineCanvas, { minHeight: taskTimelineHeight }]}> 
+            <View style={[styles.timelineCanvas, { minHeight: taskTimelineHeight }]}>
               {Array.from({ length: HOUR_SLOT_COUNT }, (_, index) => {
                 const hour = TIMELINE_START_HOUR + index;
 
                 return (
-                  <View key={hour} style={[styles.timelineRow, { top: index * hourSlotHeight, height: hourSlotHeight }]}> 
+                  <View key={hour} style={[styles.timelineRow, { top: index * hourSlotHeight, height: hourSlotHeight }]}>
                     <Text style={[styles.hourLabel, { width: labelColumnWidth, color: theme.textMuted }]}>
                       {formatTimeLabel(`${String(hour).padStart(2, '0')}:00`)}
                     </Text>
@@ -1835,7 +2329,7 @@ export default function StudyPlannerScreen() {
               style={styles.unscheduledHeader}
             >
               <View>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>Unscheduled tasks</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Pending Tasks</Text>
                 <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>{unscheduledTasks.length} task{unscheduledTasks.length === 1 ? '' : 's'}</Text>
               </View>
 
@@ -1897,8 +2391,8 @@ export default function StudyPlannerScreen() {
           <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
               <View>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>✨ AI Plan</Text>
-                <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>Generate a balanced study draft before saving it.</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>✨ Generate Plan</Text>
+                <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>Generate a schedule from your pending tasks and deadlines.</Text>
               </View>
 
               <Pressable onPress={closeAIPlannerModal} style={styles.modalCloseButton}>
@@ -1939,7 +2433,7 @@ export default function StudyPlannerScreen() {
             </View>
 
             <View style={styles.formGroup}>
-              <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>Subjects or topics</Text>
+              <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>Pending task subjects</Text>
               <TextInput
                 value={aiPlanForm.subjectsInput}
                 onChangeText={(value) => setAIPlanForm((currentValue) => ({ ...currentValue, subjectsInput: value }))}
@@ -2213,7 +2707,7 @@ export default function StudyPlannerScreen() {
                     <View style={styles.aiPlanSessionCopy}>
                       <Text style={[styles.aiPlanSessionTitle, { color: theme.text }]} numberOfLines={1}>{session.title}</Text>
                       <Text style={[styles.aiPlanSessionMeta, { color: theme.textMuted }]}>
-                        {session.subject} • {formatAiFriendlyDate(parseDateInput(session.date) ?? selectedDate)}
+                        {session.subject} â€¢ {formatAiFriendlyDate(parseDateInput(session.date) ?? selectedDate)}
                       </Text>
                       <Text style={[styles.aiPlanSessionMeta, { color: theme.textMuted }]}>
                         {formatTimeDisplay(session.startTime)} – {formatTimeDisplay(session.endTime)}
@@ -2271,105 +2765,863 @@ export default function StudyPlannerScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showTaskFormModal} transparent animationType="fade" onRequestClose={closeTaskFormModal}>
+      <Modal
+        visible={showTaskFormModal}
+        transparent
+        animationType="fade"
+        onRequestClose={closeTaskFormModal}
+      >
         <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeTaskFormModal} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={closeTaskFormModal}
+          />
 
-          <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+              },
+            ]}
+          >
             <View style={styles.modalHeader}>
-              <View>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>{editingTaskId ? 'Edit Plan' : 'Add Plan'}</Text>
-                <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>Schedule a task with a date and time range.</Text>
+              <View style={styles.modalHeaderCopy}>
+                <Text
+                  style={[
+                    styles.sectionTitle,
+                    { color: theme.text },
+                  ]}
+                >
+                  {editingTaskId
+                    ? 'Edit Study Task'
+                    : 'Add Study Task'}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.sectionSubtitle,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Add the deadline and estimated work. The
+                  generator will schedule it later.
+                </Text>
               </View>
 
-              <Pressable onPress={closeTaskFormModal} style={styles.modalCloseButton}>
-                <Ionicons name="close-outline" size={20} color={theme.textMuted} />
-              </Pressable>
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>Task title</Text>
-              <TextInput
-                value={taskForm.title}
-                onChangeText={(value) => setTaskForm((currentValue) => ({ ...currentValue, title: value }))}
-                editable={!isSavingTask}
-                placeholder="Basic mathematics"
-                placeholderTextColor={theme.textMuted}
-                returnKeyType="next"
-                style={[
-                  styles.modalInput,
-                  {
-                    backgroundColor: theme.inputBackground,
-                    borderColor: theme.border,
-                    color: theme.text,
-                  },
-                ]}
-              />
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>Date</Text>
               <Pressable
-                onPress={() => openPicker('date')}
-                disabled={isSavingTask}
-                style={({ pressed }) => [
-                  styles.selectorButton,
-                  {
-                    backgroundColor: theme.inputBackground,
-                    borderColor: activePicker === 'date' ? theme.primary : theme.border,
-                    opacity: isSavingTask ? 0.65 : pressed ? 0.94 : 1,
-                  },
-                ]}
+                onPress={closeTaskFormModal}
+                style={styles.modalCloseButton}
               >
-                <View style={styles.selectorRow}>
-                  <Ionicons name="calendar-outline" size={16} color={theme.primary} />
-                  <Text style={[styles.selectorButtonText, { color: theme.text }]}>{dateFieldLabel}</Text>
-                </View>
-                <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
+                <Ionicons
+                  name="close-outline"
+                  size={20}
+                  color={theme.textMuted}
+                />
               </Pressable>
             </View>
 
-            <View style={styles.formRow}>
-              <View style={styles.formGroupHalf}>
-                <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>Start time</Text>
+            <ScrollView
+              style={styles.taskFormScroll}
+              contentContainerStyle={styles.taskFormContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Task type
+                </Text>
+
                 <Pressable
-                  onPress={() => openPicker('startTime')}
-                  disabled={isSavingTask}
+                  onPress={() =>
+                    setActiveTaskDropdown((currentValue) =>
+                      currentValue === 'taskType'
+                        ? null
+                        : 'taskType',
+                    )
+                  }
                   style={({ pressed }) => [
                     styles.selectorButton,
                     {
                       backgroundColor: theme.inputBackground,
-                      borderColor: activePicker === 'startTime' ? theme.primary : theme.border,
-                      opacity: isSavingTask ? 0.65 : pressed ? 0.94 : 1,
+                      borderColor:
+                        activeTaskDropdown === 'taskType'
+                          ? theme.primary
+                          : theme.border,
+                      opacity: pressed ? 0.94 : 1,
                     },
                   ]}
                 >
-                  <Text style={[styles.selectorButtonText, { color: theme.text }]}>{formatTimeDisplay(taskForm.startTime)}</Text>
-                  <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
+                  <View style={styles.selectorRow}>
+                    <Ionicons
+                      name={selectedTaskTypeIcon}
+                      size={17}
+                      color={theme.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                    >
+                      {selectedTaskTypeLabel}
+                    </Text>
+                  </View>
+
+                  <Ionicons
+                    name={
+                      activeTaskDropdown === 'taskType'
+                        ? 'chevron-up'
+                        : 'chevron-down'
+                    }
+                    size={16}
+                    color={theme.textMuted}
+                  />
                 </Pressable>
+
+                {activeTaskDropdown === 'taskType' ? (
+                  <View
+                    style={[
+                      styles.taskDropdownPanel,
+                      {
+                        backgroundColor: theme.surface,
+                        borderColor: theme.border,
+                      },
+                    ]}
+                  >
+                    <ScrollView
+                      style={styles.taskDropdownScroll}
+                      nestedScrollEnabled
+                    >
+                      {TASK_TYPE_OPTIONS.map((option) => {
+                        const isSelected =
+                          option.value === taskForm.taskType;
+
+                        return (
+                          <Pressable
+                            key={option.value}
+                            onPress={() => {
+                              setTaskForm((currentValue) => ({
+                                ...currentValue,
+                                taskType: option.value,
+                              }));
+                              setActiveTaskDropdown(null);
+                            }}
+                            style={({ pressed }) => [
+                              styles.taskDropdownOption,
+                              {
+                                backgroundColor: isSelected
+                                  ? theme.inputBackground
+                                  : theme.surface,
+                                opacity: pressed ? 0.92 : 1,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name={option.icon}
+                              size={17}
+                              color={theme.primary}
+                            />
+
+                            <Text
+                              style={[
+                                styles.taskDropdownOptionText,
+                                { color: theme.text },
+                              ]}
+                            >
+                              {option.label}
+                            </Text>
+
+                            {isSelected ? (
+                              <Ionicons
+                                name="checkmark"
+                                size={17}
+                                color={theme.primary}
+                              />
+                            ) : null}
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                ) : null}
               </View>
 
-              <View style={styles.formGroupHalf}>
-                <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>End time</Text>
-                <Pressable
-                  onPress={() => openPicker('endTime')}
-                  disabled={isSavingTask || !taskForm.startTime}
-                  style={({ pressed }) => [
-                    styles.selectorButton,
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Task title
+                </Text>
+
+                <TextInput
+                  value={taskForm.title}
+                  onChangeText={(value) =>
+                    setTaskForm((currentValue) => ({
+                      ...currentValue,
+                      title: value,
+                    }))
+                  }
+                  editable={!isSavingTask}
+                  placeholder="Final machine learning report"
+                  placeholderTextColor={theme.textMuted}
+                  style={[
+                    styles.modalInput,
                     {
                       backgroundColor: theme.inputBackground,
-                      borderColor: activePicker === 'endTime' ? theme.primary : theme.border,
-                      opacity: isSavingTask || !taskForm.startTime ? 0.6 : pressed ? 0.94 : 1,
+                      borderColor: theme.border,
+                      color: theme.text,
+                    },
+                  ]}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Subject
+                </Text>
+
+                <TextInput
+                  value={taskForm.subject}
+                  onChangeText={(value) =>
+                    setTaskForm((currentValue) => ({
+                      ...currentValue,
+                      subject: value,
+                    }))
+                  }
+                  editable={!isSavingTask}
+                  placeholder="Machine Learning"
+                  placeholderTextColor={theme.textMuted}
+                  style={[
+                    styles.modalInput,
+                    {
+                      backgroundColor: theme.inputBackground,
+                      borderColor: theme.border,
+                      color: theme.text,
+                    },
+                  ]}
+                />
+              </View>
+
+              <View style={styles.formRow}>
+                <View style={styles.formGroupHalf}>
+                  <Text
+                    style={[
+                      styles.fieldLabel,
+                      { color: theme.textMuted },
+                    ]}
+                  >
+                    Deadline date
+                  </Text>
+
+                  <Pressable
+                    onPress={() =>
+                      openPicker('date', 'task-form')
+                    }
+                    style={({ pressed }) => [
+                      styles.selectorButton,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          activePicker === 'date'
+                            ? theme.primary
+                            : theme.border,
+                        opacity: pressed ? 0.94 : 1,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {dateFieldLabel}
+                    </Text>
+
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color={theme.primary}
+                    />
+                  </Pressable>
+                </View>
+
+                <View style={styles.formGroupHalf}>
+                  <Text
+                    style={[
+                      styles.fieldLabel,
+                      { color: theme.textMuted },
+                    ]}
+                  >
+                    Deadline time
+                  </Text>
+
+                  <Pressable
+                    onPress={() =>
+                      setActiveTaskDropdown((currentValue) =>
+                        currentValue === 'deadlineTime'
+                          ? null
+                          : 'deadlineTime',
+                      )
+                    }
+                    style={({ pressed }) => [
+                      styles.selectorButton,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          activeTaskDropdown ===
+                          'deadlineTime'
+                            ? theme.primary
+                            : theme.border,
+                        opacity: pressed ? 0.94 : 1,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                    >
+                      {formatTimeDisplay(
+                        taskForm.deadlineTime,
+                      )}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-down"
+                      size={16}
+                      color={theme.textMuted}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+
+              {activeTaskDropdown === 'deadlineTime' ? (
+                <View
+                  style={[
+                    styles.taskDropdownPanel,
+                    {
+                      backgroundColor: theme.surface,
+                      borderColor: theme.border,
                     },
                   ]}
                 >
-                  <Text style={[styles.selectorButtonText, { color: theme.text }]}>{formatTimeDisplay(taskForm.endTime)}</Text>
-                  <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
-                </Pressable>
-              </View>
-            </View>
+                  <ScrollView
+                    style={styles.taskDropdownScroll}
+                    nestedScrollEnabled
+                  >
+                    {TIME_OPTIONS.map((option) => (
+                      <Pressable
+                        key={option.value}
+                        onPress={() => {
+                          setTaskForm((currentValue) => ({
+                            ...currentValue,
+                            deadlineTime: option.value,
+                          }));
+                          setActiveTaskDropdown(null);
+                        }}
+                        style={({ pressed }) => [
+                          styles.taskDropdownOption,
+                          {
+                            backgroundColor:
+                              option.value ===
+                              taskForm.deadlineTime
+                                ? theme.inputBackground
+                                : theme.surface,
+                            opacity: pressed ? 0.92 : 1,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={17}
+                          color={theme.primary}
+                        />
 
-            {formError ? <Text style={[styles.formError, { color: theme.error }]}>{formError}</Text> : null}
+                        <Text
+                          style={[
+                            styles.taskDropdownOptionText,
+                            { color: theme.text },
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              <View style={styles.formRow}>
+                <View style={styles.formGroupHalf}>
+                  <Text
+                    style={[
+                      styles.fieldLabel,
+                      { color: theme.textMuted },
+                    ]}
+                  >
+                    Estimated study time
+                  </Text>
+
+                  <Pressable
+                    onPress={() =>
+                      setActiveTaskDropdown((currentValue) =>
+                        currentValue === 'estimatedMinutes'
+                          ? null
+                          : 'estimatedMinutes',
+                      )
+                    }
+                    style={({ pressed }) => [
+                      styles.selectorButton,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          activeTaskDropdown ===
+                          'estimatedMinutes'
+                            ? theme.primary
+                            : theme.border,
+                        opacity: pressed ? 0.94 : 1,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                    >
+                      {selectedEstimatedTimeLabel}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-down"
+                      size={16}
+                      color={theme.textMuted}
+                    />
+                  </Pressable>
+                </View>
+
+                <View style={styles.formGroupHalf}>
+                  <Text
+                    style={[
+                      styles.fieldLabel,
+                      { color: theme.textMuted },
+                    ]}
+                  >
+                    Priority
+                  </Text>
+
+                  <Pressable
+                    onPress={() =>
+                      setActiveTaskDropdown((currentValue) =>
+                        currentValue === 'priority'
+                          ? null
+                          : 'priority',
+                      )
+                    }
+                    style={({ pressed }) => [
+                      styles.selectorButton,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          activeTaskDropdown === 'priority'
+                            ? theme.primary
+                            : theme.border,
+                        opacity: pressed ? 0.94 : 1,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                    >
+                      {selectedPriorityLabel}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-down"
+                      size={16}
+                      color={theme.textMuted}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+
+              {activeTaskDropdown ===
+              'estimatedMinutes' ? (
+                <View
+                  style={[
+                    styles.taskDropdownPanel,
+                    {
+                      backgroundColor: theme.surface,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  {ESTIMATED_TIME_OPTIONS.map((option) => (
+                    <Pressable
+                      key={option.value}
+                      onPress={() => {
+                        setTaskForm((currentValue) => ({
+                          ...currentValue,
+                          estimatedMinutes: option.value,
+                        }));
+                        setActiveTaskDropdown(null);
+                      }}
+                      style={({ pressed }) => [
+                        styles.taskDropdownOption,
+                        {
+                          backgroundColor:
+                            option.value ===
+                            taskForm.estimatedMinutes
+                              ? theme.inputBackground
+                              : theme.surface,
+                          opacity: pressed ? 0.92 : 1,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="hourglass-outline"
+                        size={17}
+                        color={theme.primary}
+                      />
+
+                      <Text
+                        style={[
+                          styles.taskDropdownOptionText,
+                          { color: theme.text },
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+
+              {activeTaskDropdown === 'priority' ? (
+                <View
+                  style={[
+                    styles.taskDropdownPanel,
+                    {
+                      backgroundColor: theme.surface,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  {PRIORITY_OPTIONS.map((option) => (
+                    <Pressable
+                      key={option.value}
+                      onPress={() => {
+                        setTaskForm((currentValue) => ({
+                          ...currentValue,
+                          priority: option.value,
+                        }));
+                        setActiveTaskDropdown(null);
+                      }}
+                      style={({ pressed }) => [
+                        styles.taskDropdownOption,
+                        {
+                          backgroundColor:
+                            option.value ===
+                            taskForm.priority
+                              ? theme.inputBackground
+                              : theme.surface,
+                          opacity: pressed ? 0.92 : 1,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="flag-outline"
+                        size={17}
+                        color={theme.primary}
+                      />
+
+                      <Text
+                        style={[
+                          styles.taskDropdownOptionText,
+                          { color: theme.text },
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Preferred study window
+                </Text>
+
+                <Text
+                  style={[
+                    styles.fieldHint,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Tell the generator when you are normally
+                  available to study.
+                </Text>
+
+                <View style={styles.formRow}>
+                  <View style={styles.formGroupHalf}>
+                    <Pressable
+                      onPress={() =>
+                        setActiveTaskDropdown(
+                          (currentValue) =>
+                            currentValue ===
+                            'preferredStartTime'
+                              ? null
+                              : 'preferredStartTime',
+                        )
+                      }
+                      style={({ pressed }) => [
+                        styles.selectorButton,
+                        {
+                          backgroundColor:
+                            theme.inputBackground,
+                          borderColor:
+                            activeTaskDropdown ===
+                            'preferredStartTime'
+                              ? theme.primary
+                              : theme.border,
+                          opacity: pressed ? 0.94 : 1,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.selectorButtonText,
+                          { color: theme.text },
+                        ]}
+                      >
+                        {formatTimeDisplay(
+                          taskForm.preferredStartTime,
+                        )}
+                      </Text>
+
+                      <Ionicons
+                        name="chevron-down"
+                        size={16}
+                        color={theme.textMuted}
+                      />
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.formGroupHalf}>
+                    <Pressable
+                      onPress={() =>
+                        setActiveTaskDropdown(
+                          (currentValue) =>
+                            currentValue ===
+                            'preferredEndTime'
+                              ? null
+                              : 'preferredEndTime',
+                        )
+                      }
+                      style={({ pressed }) => [
+                        styles.selectorButton,
+                        {
+                          backgroundColor:
+                            theme.inputBackground,
+                          borderColor:
+                            activeTaskDropdown ===
+                            'preferredEndTime'
+                              ? theme.primary
+                              : theme.border,
+                          opacity: pressed ? 0.94 : 1,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.selectorButtonText,
+                          { color: theme.text },
+                        ]}
+                      >
+                        {formatTimeDisplay(
+                          taskForm.preferredEndTime,
+                        )}
+                      </Text>
+
+                      <Ionicons
+                        name="chevron-down"
+                        size={16}
+                        color={theme.textMuted}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+
+              {activeTaskDropdown ===
+              'preferredStartTime' ? (
+                <View
+                  style={[
+                    styles.taskDropdownPanel,
+                    {
+                      backgroundColor: theme.surface,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  <ScrollView
+                    style={styles.taskDropdownScroll}
+                    nestedScrollEnabled
+                  >
+                    {TIME_OPTIONS.map((option) => (
+                      <Pressable
+                        key={option.value}
+                        onPress={() => {
+                          setTaskForm((currentValue) => {
+                            const nextEndTime =
+                              addMinutesToTime(
+                                option.value,
+                                120,
+                              ) ??
+                              currentValue.preferredEndTime;
+
+                            return {
+                              ...currentValue,
+                              preferredStartTime:
+                                option.value,
+                              preferredEndTime:
+                                parseTimeToMinutes(
+                                  currentValue.preferredEndTime,
+                                ) !== null &&
+                                parseTimeToMinutes(
+                                  currentValue.preferredEndTime,
+                                )! >
+                                  parseTimeToMinutes(
+                                    option.value,
+                                  )!
+                                  ? currentValue.preferredEndTime
+                                  : nextEndTime,
+                            };
+                          });
+
+                          setActiveTaskDropdown(null);
+                        }}
+                        style={({ pressed }) => [
+                          styles.taskDropdownOption,
+                          {
+                            backgroundColor:
+                              option.value ===
+                              taskForm.preferredStartTime
+                                ? theme.inputBackground
+                                : theme.surface,
+                            opacity: pressed ? 0.92 : 1,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.taskDropdownOptionText,
+                            { color: theme.text },
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              {activeTaskDropdown ===
+              'preferredEndTime' ? (
+                <View
+                  style={[
+                    styles.taskDropdownPanel,
+                    {
+                      backgroundColor: theme.surface,
+                      borderColor: theme.border,
+                    },
+                  ]}
+                >
+                  <ScrollView
+                    style={styles.taskDropdownScroll}
+                    nestedScrollEnabled
+                  >
+                    {getTimeOptionsAfter(
+                      taskForm.preferredStartTime,
+                    ).map((option) => (
+                      <Pressable
+                        key={option.value}
+                        onPress={() => {
+                          setTaskForm((currentValue) => ({
+                            ...currentValue,
+                            preferredEndTime: option.value,
+                          }));
+                          setActiveTaskDropdown(null);
+                        }}
+                        style={({ pressed }) => [
+                          styles.taskDropdownOption,
+                          {
+                            backgroundColor:
+                              option.value ===
+                              taskForm.preferredEndTime
+                                ? theme.inputBackground
+                                : theme.surface,
+                            opacity: pressed ? 0.92 : 1,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.taskDropdownOptionText,
+                            { color: theme.text },
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              {formError ? (
+                <Text
+                  style={[
+                    styles.formError,
+                    { color: theme.error },
+                  ]}
+                >
+                  {formError}
+                </Text>
+              ) : null}
+            </ScrollView>
 
             <View style={styles.modalActions}>
               <Pressable
@@ -2380,29 +3632,58 @@ export default function StudyPlannerScreen() {
                   {
                     backgroundColor: theme.inputBackground,
                     borderColor: theme.border,
-                    opacity: isSavingTask ? 0.6 : pressed ? 0.92 : 1,
+                    opacity: isSavingTask
+                      ? 0.6
+                      : pressed
+                        ? 0.92
+                        : 1,
                   },
                 ]}
               >
-                <Text style={[styles.secondaryButtonText, { color: theme.text }]}>Cancel</Text>
+                <Text
+                  style={[
+                    styles.secondaryButtonText,
+                    { color: theme.text },
+                  ]}
+                >
+                  Cancel
+                </Text>
               </Pressable>
 
               <Pressable
-                onPress={editingTaskId ? saveEditedTask : addTask}
+                onPress={
+                  editingTaskId
+                    ? saveEditedTask
+                    : addTask
+                }
                 disabled={isSavingTask}
                 style={({ pressed }) => [
                   styles.primaryButton,
                   {
                     backgroundColor: theme.primary,
-                    opacity: isSavingTask ? 0.7 : pressed ? 0.92 : 1,
+                    opacity: isSavingTask
+                      ? 0.7
+                      : pressed
+                        ? 0.92
+                        : 1,
                   },
                 ]}
               >
                 {isSavingTask ? (
-                  <ActivityIndicator size="small" color={theme.buttonText} />
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.buttonText}
+                  />
                 ) : (
-                  <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>
-                    {editingTaskId ? 'Save Changes' : 'Save Plan'}
+                  <Text
+                    style={[
+                      styles.primaryButtonText,
+                      { color: theme.buttonText },
+                    ]}
+                  >
+                    {editingTaskId
+                      ? 'Save Changes'
+                      : 'Save Study Task'}
                   </Text>
                 )}
               </Pressable>
@@ -2411,7 +3692,15 @@ export default function StudyPlannerScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showTaskFormModal && activePicker === 'date'} transparent animationType="fade" onRequestClose={closeAllPickers}>
+      <Modal
+        visible={
+          (showTaskFormModal || showAIPlannerModal) &&
+          activePicker === 'date'
+        }
+        transparent
+        animationType="fade"
+        onRequestClose={closeAllPickers}
+      >
         <View style={styles.pickerBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeAllPickers} />
 
@@ -2495,7 +3784,10 @@ export default function StudyPlannerScreen() {
       </Modal>
 
       <Modal
-        visible={showTaskFormModal && activeTimePickerList}
+        visible={
+          (showTaskFormModal || showAIPlannerModal) &&
+          activeTimePickerList
+        }
         transparent
         animationType="fade"
         onRequestClose={closeAllPickers}
@@ -2582,7 +3874,7 @@ export default function StudyPlannerScreen() {
                 </Text>
                 <Text style={[styles.taskPreviewMeta, { color: theme.textMuted }]}>
                   {getStoredTaskDate(selectedTask) ? formatLongDay(getStoredTaskDate(selectedTask) as Date) : 'No date'}
-                  {selectedTask.startTime && selectedTask.endTime ? ` • ${getTaskTimeRange(selectedTask)}` : ''}
+                  {selectedTask.startTime && selectedTask.endTime ? ` â€¢ ${getTaskTimeRange(selectedTask)}` : ''}
                 </Text>
               </View>
             ) : null}
@@ -2640,7 +3932,7 @@ export default function StudyPlannerScreen() {
               </Pressable>
             </View>
 
-            <Pressable onPress={closeTaskActionsModal} style={({ pressed }) => [styles.cancelButton, { opacity: pressed ? 0.94 : 1 }]}> 
+            <Pressable onPress={closeTaskActionsModal} style={({ pressed }) => [styles.cancelButton, { opacity: pressed ? 0.94 : 1 }]}>
               <Text style={[styles.cancelButtonText, { color: theme.textMuted }]}>Cancel</Text>
             </Pressable>
           </View>
@@ -3152,6 +4444,45 @@ segmentButtonText: {
     fontSize: Typography.body - 1,
     fontWeight: '700',
   },
+  taskFormScroll: {
+    maxHeight: 540,
+  },
+
+  taskFormContent: {
+    gap: Spacing.md,
+    paddingBottom: 4,
+  },
+
+  taskDropdownPanel: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    maxHeight: 210,
+    overflow: 'hidden',
+  },
+
+  taskDropdownScroll: {
+    maxHeight: 208,
+  },
+
+  taskDropdownOption: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+  },
+
+  taskDropdownOptionText: {
+    flex: 1,
+    fontSize: Typography.body - 1,
+    fontWeight: '700',
+  },
+
+  fieldHint: {
+    fontSize: Typography.caption,
+    lineHeight: 17,
+  },
+
   formError: {
     fontSize: Typography.caption + 1,
     lineHeight: 18,
