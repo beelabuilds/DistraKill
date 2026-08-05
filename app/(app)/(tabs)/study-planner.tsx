@@ -1,12 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
+import {
+    getAI,
+    getGenerativeModel,
+    GoogleAIBackend,
+} from 'firebase/ai';
 import {
     addDoc,
     collection,
     deleteDoc,
     doc,
     onSnapshot,
-    updateDoc
+    updateDoc,
+    writeBatch,
 } from 'firebase/firestore';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -28,11 +33,41 @@ import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 
+type TaskType =
+  | 'quiz'
+  | 'assignment'
+  | 'exam'
+  | 'report'
+  | 'project'
+  | 'presentation'
+  | 'reading'
+  | 'revision'
+  | 'lab'
+  | 'other';
+
+type TaskPriority = 'high' | 'medium' | 'low';
+
+type StudyItemKind = 'task' | 'session';
+
 type StudyTask = {
   id: string;
   title: string;
   completed: boolean;
   createdAt: number;
+
+  // New study-task information
+  kind?: StudyItemKind | null;
+  subject?: string | null;
+  taskType?: TaskType | null;
+  deadlineDate?: string | null;
+  deadlineTime?: string | null;
+  estimatedMinutes?: number | null;
+  priority?: TaskPriority | null;
+  preferredStartTime?: string | null;
+  preferredEndTime?: string | null;
+  source?: 'manual' | 'ai' | null;
+
+  // Existing fields kept for old tasks and scheduled sessions
   date?: string | number | null;
   dueDate?: string | number | null;
   startTime?: string | null;
@@ -41,11 +76,22 @@ type StudyTask = {
 
 type TaskFormState = {
   title: string;
+
+  // New task fields
+  subject: string;
+  taskType: TaskType;
+  deadlineDate: string;
+  deadlineTime: string;
+  estimatedMinutes: number;
+  priority: TaskPriority;
+  preferredStartTime: string;
+  preferredEndTime: string;
+
+  // Temporary legacy fields, removed after the new form works
   date: string;
   startTime: string;
   endTime: string;
 };
-
 type TaskAction = 'toggleComplete' | 'edit' | 'delete';
 type PickerMode = 'date' | 'startTime' | 'endTime' | null;
 type PlanningMode = 'single-day' | 'weekly';
@@ -376,34 +422,50 @@ function validateGeneratedSessions(mode: PlanningMode, form: AIStudyFormState, r
       }
     }
 
-    if (isValid && mode === 'single-day' && (!parsedStudyDate || !sameDay(normalizedSessionDate, parsedStudyDate))) {
-      isValid = false;
-    }
+  if (isValid && mode === 'single-day') {
+  if (
+    !normalizedSessionDate ||
+    !parsedStudyDate ||
+    !sameDay(normalizedSessionDate, parsedStudyDate)
+  ) {
+    isValid = false;
+  }
+}
 
-    if (isValid && mode === 'weekly') {
-      if (!startDate || !endDate) {
-        isValid = false;
-      } else if (normalizedSessionDate < startDate || normalizedSessionDate > endDate || !selectedDays.has(normalizedSessionDate.getDay())) {
-        isValid = false;
-      }
-    }
+if (isValid && mode === 'weekly') {
+  if (!normalizedSessionDate || !startDate || !endDate) {
+    isValid = false;
+  } else if (
+    normalizedSessionDate < startDate ||
+    normalizedSessionDate > endDate ||
+    !selectedDays.has(normalizedSessionDate.getDay())
+  ) {
+    isValid = false;
+  }
+}
 
-    if (isValid) {
-      const windowKey = `${formatDateInput(normalizedSessionDate)}-${normalizedSessionStart}-${normalizedSessionEnd}`;
+if (isValid && normalizedSessionDate) {
+  const windowKey =
+    `${formatDateInput(normalizedSessionDate)}-` +
+    `${normalizedSessionStart}-` +
+    `${normalizedSessionEnd}`;
 
-      if (seenWindows.has(windowKey)) {
-        isValid = false;
-      } else {
-        seenWindows.add(windowKey);
-        validSessions.push({
-          title: trimmedTitle,
-          subject: trimmedSubject,
-          date: formatDateInput(normalizedSessionDate),
-          startTime: normalizedSessionStart,
-          endTime: normalizedSessionEnd,
-        });
-      }
-    }
+  if (seenWindows.has(windowKey)) {
+    isValid = false;
+  } else {
+    seenWindows.add(windowKey);
+
+    validSessions.push({
+      title: trimmedTitle,
+      subject: trimmedSubject,
+      date: formatDateInput(normalizedSessionDate),
+      startTime: normalizedSessionStart,
+      endTime: normalizedSessionEnd,
+    });
+  }
+} else if (isValid) {
+  isValid = false;
+}
 
     if (!isValid) {
       rejectedCount += 1;
@@ -635,22 +697,88 @@ function getTimeOptionsAfter(startTime: string) {
   });
 }
 
-function getTaskFormDefaults(date: Date, task?: StudyTask | null) {
-  const taskDate = task ? getStoredTaskDate(task) : null;
-  const startTime = task?.startTime && parseTimeToMinutes(task.startTime) !== null
-    ? task.startTime
-    : DEFAULT_START_TIME;
-  const fallbackEndTime = task?.endTime && parseTimeToMinutes(task.endTime) !== null
-    ? task.endTime
-    : getDefaultEndTime(startTime) || DEFAULT_END_TIME;
-  const startMinutes = parseTimeToMinutes(startTime) ?? 0;
-  const endMinutes = parseTimeToMinutes(fallbackEndTime) ?? 0;
+function getTaskFormDefaults(
+  date: Date,
+  task?: StudyTask | null,
+): TaskFormState {
+  const storedTaskDate = task ? getStoredTaskDate(task) : null;
+
+  const legacyStartTime =
+    task?.startTime &&
+    parseTimeToMinutes(task.startTime) !== null
+      ? task.startTime
+      : DEFAULT_START_TIME;
+
+  const legacyEndCandidate =
+    task?.endTime &&
+    parseTimeToMinutes(task.endTime) !== null
+      ? task.endTime
+      : getDefaultEndTime(legacyStartTime) || DEFAULT_END_TIME;
+
+  const legacyStartMinutes =
+    parseTimeToMinutes(legacyStartTime) ?? 0;
+
+  const legacyEndMinutes =
+    parseTimeToMinutes(legacyEndCandidate) ?? 0;
+
+  const preferredStartTime =
+    task?.preferredStartTime &&
+    parseTimeToMinutes(task.preferredStartTime) !== null
+      ? task.preferredStartTime
+      : '16:00';
+
+  const preferredEndCandidate =
+    task?.preferredEndTime &&
+    parseTimeToMinutes(task.preferredEndTime) !== null
+      ? task.preferredEndTime
+      : addMinutesToTime(preferredStartTime, 120) ?? '18:00';
+
+  const preferredStartMinutes =
+    parseTimeToMinutes(preferredStartTime) ?? 0;
+
+  const preferredEndMinutes =
+    parseTimeToMinutes(preferredEndCandidate) ?? 0;
 
   return {
     title: task?.title ?? '',
-    date: formatDateInput(taskDate ?? date),
-    startTime,
-    endTime: endMinutes > startMinutes ? fallbackEndTime : getDefaultEndTime(startTime) || DEFAULT_END_TIME,
+    subject: task?.subject ?? '',
+    taskType: task?.taskType ?? 'assignment',
+
+    deadlineDate:
+      task?.deadlineDate ??
+      formatDateInput(storedTaskDate ?? date),
+
+    deadlineTime:
+      task?.deadlineTime &&
+      parseTimeToMinutes(task.deadlineTime) !== null
+        ? task.deadlineTime
+        : '23:45',
+
+    estimatedMinutes:
+      typeof task?.estimatedMinutes === 'number' &&
+      task.estimatedMinutes > 0
+        ? task.estimatedMinutes
+        : 120,
+
+    priority: task?.priority ?? 'medium',
+
+    preferredStartTime,
+
+    preferredEndTime:
+      preferredEndMinutes > preferredStartMinutes
+        ? preferredEndCandidate
+        : addMinutesToTime(preferredStartTime, 120) ?? '18:00',
+
+    // Temporary support for the current schedule code
+    date: formatDateInput(storedTaskDate ?? date),
+
+    startTime: legacyStartTime,
+
+    endTime:
+      legacyEndMinutes > legacyStartMinutes
+        ? legacyEndCandidate
+        : getDefaultEndTime(legacyStartTime) ??
+          DEFAULT_END_TIME,
   };
 }
 
@@ -757,12 +885,10 @@ export default function StudyPlannerScreen() {
   const [planningMode, setPlanningMode] = useState<PlanningMode>('single-day');
   const [aiPlanForm, setAIPlanForm] = useState<AIStudyFormState>(() => getAiDefaultForm(startOfDay(new Date())));
   const [aiPlanSessions, setAIPlanSessions] = useState<PlannedSession[]>([]);
-  const [taskForm, setTaskForm] = useState<TaskFormState>({
-    title: '',
-    date: formatDateInput(startOfDay(new Date())),
-    startTime: DEFAULT_START_TIME,
-    endTime: DEFAULT_END_TIME,
-  });
+  const [taskForm, setTaskForm] =
+  useState<TaskFormState>(() =>
+    getTaskFormDefaults(startOfDay(new Date())),
+  );
 
   const weekDays = useMemo(() => {
     const today = startOfDay(new Date());
@@ -2861,6 +2987,27 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.md,
   },
+  segmentedControl: {
+  flexDirection: 'row',
+  gap: 8,
+},
+
+segmentButton: {
+  alignItems: 'center',
+  borderRadius: Radius.pill,
+  borderWidth: 1,
+  flex: 1,
+  justifyContent: 'center',
+  minHeight: 42,
+  paddingHorizontal: Spacing.md,
+  paddingVertical: 10,
+},
+
+segmentButtonText: {
+  fontSize: Typography.caption + 1,
+  fontWeight: '800',
+  textAlign: 'center',
+},
   modalHeaderCopy: {
     flex: 1,
     gap: 2,
