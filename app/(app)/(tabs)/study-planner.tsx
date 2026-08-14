@@ -1,5 +1,9 @@
+
+
 import '@/config/runtime-polyfills';
 import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import {
   getAI,
   getGenerativeModel,
@@ -17,7 +21,6 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -50,6 +53,22 @@ type TaskType =
 type TaskPriority = 'high' | 'medium' | 'low';
 
 type StudyItemKind = 'task' | 'session';
+type SelectedPdf = {
+  name: string;
+  uri: string | null;
+  mimeType: string | null;
+  size: number | null;
+
+  // In-memory only. Never save the raw PDF to Firestore.
+  base64?: string | null;
+};
+
+type PdfAnalysis = {
+  title: string;
+  pageCount: number | null;
+  summary: string;
+  detectedTopics: string[];
+};
 
 type StudyTask = {
   id: string;
@@ -68,6 +87,16 @@ type StudyTask = {
   preferredStartTime?: string | null;
   preferredEndTime?: string | null;
   source?: 'manual' | 'ai' | null;
+  difficultTopics?: string | null;
+  pdfName?: string | null;
+  pdfMimeType?: string | null;
+  pdfSize?: number | null;
+  pdfDocumentTitle?: string | null;
+  pdfPageCount?: number | null;
+  pdfSummary?: string | null;
+  pdfDetectedTopics?: string[] | null;
+  selectedDifficultTopics?: string[] | null;
+  planStatus?: 'pending' | 'scheduled' | null;
 
   // Existing fields kept for old tasks and scheduled sessions
   date?: string | number | null;
@@ -81,6 +110,7 @@ type TaskFormState = {
 
   // New task fields
   subject: string;
+  difficultTopics: string;
   taskType: TaskType;
   deadlineDate: string;
   deadlineTime: string;
@@ -121,8 +151,10 @@ type AIStudyFormState = {
 
 type PlannedSession = {
   id: string;
+  taskId: string;
   title: string;
   subject: string;
+  focusTopics: string[];
   date: string;
   startTime: string;
   endTime: string;
@@ -131,8 +163,10 @@ type PlannedSession = {
 
 type AIPlanPayload = {
   sessions: {
+    taskId: string;
     title: string;
     subject: string;
+    focusTopics: string[];
     date: string;
     startTime: string;
     endTime: string;
@@ -155,6 +189,10 @@ const TIME_STEP_MINUTES = 15;
 const TIME_START_MINUTES = 6 * 60;
 const TIME_END_MINUTES = 23 * 60 + 45;
 const DEFAULT_AI_SESSION_LENGTH = 45;
+
+// Firebase AI Logic inline requests have a 20 MB total request limit.
+// Keep the raw PDF smaller to leave room for base64 expansion and text.
+const MAX_INLINE_PDF_BYTES = 14 * 1024 * 1024;
 const AI_MODEL = getGenerativeModel(getAI(aiFirebaseApp, { backend: new GoogleAIBackend() }), {
 model: 'gemini-3.5-flash-lite',
 }, {
@@ -362,8 +400,95 @@ function parseAiResponsePayload(rawValue: string): AIPlanPayload | null {
   return null;
 }
 
+function parsePdfAnalysisResponse(rawValue: string): PdfAnalysis | null {
+  const cleanedValue = stripMarkdownCodeFences(rawValue);
+  const candidatesToTry = [
+    cleanedValue,
+    extractBalancedJsonCandidate(cleanedValue),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidatesToTry) {
+    try {
+      const parsedValue = JSON.parse(candidate) as {
+        title?: unknown;
+        pageCount?: unknown;
+        summary?: unknown;
+        detectedTopics?: unknown;
+        topics?: unknown;
+      };
+
+      if (!parsedValue || typeof parsedValue !== 'object') {
+        continue;
+      }
+
+      const title =
+        typeof parsedValue.title === 'string'
+          ? parsedValue.title.trim()
+          : '';
+
+      const summary =
+        typeof parsedValue.summary === 'string'
+          ? parsedValue.summary.trim()
+          : '';
+
+      const rawTopics = Array.isArray(parsedValue.detectedTopics)
+        ? parsedValue.detectedTopics
+        : Array.isArray(parsedValue.topics)
+          ? parsedValue.topics
+          : [];
+
+      const detectedTopics = Array.from(
+        new Set(
+          rawTopics
+            .filter((topic): topic is string => typeof topic === 'string')
+            .map((topic) => topic.trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 12);
+
+      const pageCount =
+        typeof parsedValue.pageCount === 'number' &&
+        Number.isFinite(parsedValue.pageCount) &&
+        parsedValue.pageCount > 0
+          ? Math.round(parsedValue.pageCount)
+          : null;
+
+      if (!summary || detectedTopics.length === 0) {
+        continue;
+      }
+
+      return {
+        title: title || 'Uploaded study material',
+        pageCount,
+        summary,
+        detectedTopics,
+      };
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('PDF analysis JSON parse attempt failed', error);
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeBase64Payload(value: string) {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue.startsWith('data:')) {
+    return trimmedValue;
+  }
+
+  const commaIndex = trimmedValue.indexOf(',');
+
+  return commaIndex >= 0
+    ? trimmedValue.slice(commaIndex + 1)
+    : trimmedValue;
+}
+
 function getPlannedSessionId(session: AIPlanPayload['sessions'][number], index: number) {
-  return `${session.date}-${session.startTime}-${session.endTime}-${index}`;
+  return `${session.taskId}-${session.date}-${session.startTime}-${session.endTime}-${index}`;
 }
 
 function getPlanningDateBounds(mode: PlanningMode, form: AIStudyFormState) {
@@ -399,7 +524,7 @@ function buildPlanningPrompt(
 
   const taskDetails = pendingTasks.map((task) => ({
     taskId: task.id,
-    title: task.title,
+    taskTitle: task.title,
     subject: task.subject ?? 'General study',
     taskType: task.taskType ?? 'other',
     deadlineDate:
@@ -414,28 +539,55 @@ function buildPlanningPrompt(
       task.preferredStartTime ?? form.startTime,
     preferredEndTime:
       task.preferredEndTime ?? form.endTime,
+    studentWrittenDifficulties:
+      task.difficultTopics?.trim() || 'None specified',
+    studentSelectedDifficultTopics:
+      task.selectedDifficultTopics?.length
+        ? task.selectedDifficultTopics
+        : [],
+    pdfAnalysis: task.pdfSummary
+      ? {
+          fileName: task.pdfName ?? 'Study material PDF',
+          documentTitle:
+            task.pdfDocumentTitle ??
+            'Uploaded study material',
+          pageCount: task.pdfPageCount ?? null,
+          summary: task.pdfSummary,
+          detectedTopics:
+            task.pdfDetectedTopics ?? [],
+        }
+      : null,
   }));
 
   const baseStructure =
-    '{"sessions":[{"title":"Machine Learning Report","subject":"Machine Learning","date":"2026-08-05","startTime":"16:00","endTime":"16:45"}]}';
+    '{"sessions":[{"taskId":"FIRESTORE_TASK_ID","title":"Review CSMA/CA backoff","subject":"Wireless","focusTopics":["CSMA/CA and Backoff Algorithm"],"date":"2026-08-15","startTime":"16:00","endTime":"16:45"}]}';
 
   const sharedInstructions = [
-    'You are a study scheduling assistant.',
+    'You are a personalized study scheduling assistant.',
     'Create study sessions only for the saved pending tasks provided below.',
     'Return JSON only. Do not include Markdown, code fences, notes, or explanations.',
     `Required JSON structure: ${baseStructure}`,
-    `Saved pending tasks: ${JSON.stringify(taskDetails, null, 2)}`,
+    `Saved pending tasks with PDF analysis and student difficulties: ${JSON.stringify(taskDetails, null, 2)}`,
     `Use only these subjects: ${subjects.join(', ')}`,
-    'Use the exact saved task title for each generated session title.',
+    'Every session MUST include the exact taskId of the saved task it belongs to.',
     'Use the exact saved subject for each generated session subject.',
-    'Do not invent new tasks, titles, or subjects.',
+    'focusTopics MUST be an array containing the real PDF topic names covered in that session.',
+    'When a task has studentSelectedDifficultTopics, EVERY selected difficult topic MUST appear in at least one session focusTopics value.',
+    'Selected difficult topics must receive more practice/review than easier material.',
+    'When a PDF analysis exists, base session titles and focusTopics on pdfAnalysis.detectedTopics and pdfAnalysis.summary.',
+    'Do not invent chapter topics that are not supported by the saved task data.',
+    'Avoid vague titles such as only "Review pages 20-40". Name the actual concept or activity whenever the PDF analysis provides it.',
+    'Use a sensible learning sequence when time allows: overview -> difficult concepts -> worked examples/practice -> spaced review -> final self-test.',
+    'Focus mainly on deciding the best learning sequence, session titles, and focusTopics from the PDF analysis and student difficulties.',
+    'The app will normalize the final dates, times, and durations to exactly match the student workload and availability.',
+    `Keep suggested sessions around ${form.sessionLength} minutes when possible.`,
     'Give earlier deadlines and high-priority tasks more attention.',
-    'Split larger estimated study times across multiple sessions when necessary.',
-    'Do not schedule a task after its deadline.',
+    'Never schedule any part of a task after its deadline date. If the task has a deadline time, the session must also finish by that time on the deadline date.',
+    'For weekly plans, spread sessions across different allowed days when there are enough days before the deadline.',
     'Avoid overlapping study sessions.',
-    'Keep reasonable breaks between sessions.',
+    'Keep reasonable breaks between sessions when the available time allows.',
     'Respect each task preferred study window when possible.',
-    `Each study session should normally be ${form.sessionLength} minutes.`,
+    `The preferred session length is ${form.sessionLength} minutes, and it is a hard maximum per session.`,
   ];
 
   if (mode === 'single-day') {
@@ -473,119 +625,620 @@ function buildPlanningPrompt(
   ].join('\n');
 }
 
-function validateGeneratedSessions(mode: PlanningMode, form: AIStudyFormState, rawSessions: AIPlanPayload['sessions']): AIValidationResult {
-  const requestedSubjects = normalizeSubjectsFromInput(form.subjectsInput);
-  const normalizedSubjectSet = new Set(requestedSubjects.map(normalizeSubject));
-  const validSessions: AIPlanPayload['sessions'] = [];
+function validateGeneratedSessions(
+  mode: PlanningMode,
+  form: AIStudyFormState,
+  pendingTasks: StudyTask[],
+  rawSessions: AIPlanPayload['sessions'],
+): AIValidationResult {
+  const requestedSubjects =
+    normalizeSubjectsFromInput(
+      form.subjectsInput,
+    );
+
+  const normalizedSubjectSet =
+    new Set(
+      requestedSubjects.map(
+        normalizeSubject,
+      ),
+    );
+
+  const targetTasks =
+    pendingTasks.filter((task) =>
+      normalizedSubjectSet.has(
+        normalizeSubject(
+          task.subject ?? '',
+        ),
+      ),
+    );
+
+  if (targetTasks.length === 0) {
+    return {
+      sessions: [],
+      rejectedCount: 0,
+      rejectionReason:
+        'No pending tasks matched the selected subjects.',
+    };
+  }
+
+  const parsedStudyDate =
+    parseDateInput(form.studyDate);
+
+  const {
+    startDate,
+    endDate,
+  } = getPlanningDateBounds(
+    mode,
+    form,
+  );
+
+  const selectedDays =
+    new Set(form.studyDays);
+
+  const formStartMinutes =
+    parseTimeToMinutes(
+      normalizeTimeInput(
+        form.startTime,
+      ) || form.startTime,
+    );
+
+  const formEndMinutes =
+    parseTimeToMinutes(
+      normalizeTimeInput(
+        form.endTime,
+      ) || form.endTime,
+    );
+
+  if (
+    formStartMinutes === null ||
+    formEndMinutes === null ||
+    formEndMinutes <=
+      formStartMinutes
+  ) {
+    return {
+      sessions: [],
+      rejectedCount: 0,
+      rejectionReason:
+        'Choose a valid study time window.',
+    };
+  }
+
+  const rawCandidates =
+    Array.isArray(rawSessions)
+      ? rawSessions
+      : [];
+
+  const normalizedSessions:
+    AIPlanPayload['sessions'] = [];
+
   let rejectedCount = 0;
-  let rejectionReason = '';
-  const seenWindows = new Set<string>();
-  const parsedStudyDate = parseDateInput(form.studyDate);
-  const { startDate, endDate } = getPlanningDateBounds(mode, form);
-  const selectedDays = new Set(form.studyDays);
-  const normalizedStartTime = normalizeTimeInput(form.startTime);
-  const normalizedEndTime = normalizeTimeInput(form.endTime);
-  const minStartMinutes = parseTimeToMinutes(normalizedStartTime || form.startTime);
-  const maxEndMinutes = parseTimeToMinutes(normalizedEndTime || form.endTime);
 
-  const iterateSessions = Array.isArray(rawSessions) ? rawSessions : [];
+  for (const task of targetTasks) {
+    const taskDeadlineDate =
+      task.deadlineDate
+        ? parseDateInput(
+            task.deadlineDate,
+          )
+        : null;
 
-  for (const session of iterateSessions) {
-    const trimmedTitle = typeof session?.title === 'string' ? session.title.trim() : '';
-    const trimmedSubject = typeof session?.subject === 'string' ? session.subject.trim() : '';
-    const normalizedSessionDate = typeof session?.date === 'string' ? parseDateInput(session.date) : null;
-    const normalizedSessionStart = typeof session?.startTime === 'string' ? normalizeTimeInput(session.startTime) : '';
-    const normalizedSessionEnd = typeof session?.endTime === 'string' ? normalizeTimeInput(session.endTime) : '';
-    const startMinutes = normalizedSessionStart ? parseTimeToMinutes(normalizedSessionStart) : null;
-    const endMinutes = normalizedSessionEnd ? parseTimeToMinutes(normalizedSessionEnd) : null;
-    let isValid = true;
+    const allowedDates: Date[] = [];
 
-    if (!trimmedTitle || !trimmedSubject || !normalizedSessionDate || !normalizedSessionStart || !normalizedSessionEnd) {
-      isValid = false;
-    }
+    if (mode === 'single-day') {
+      if (!parsedStudyDate) {
+        return {
+          sessions: [],
+          rejectedCount,
+          rejectionReason:
+            'Choose a valid study date.',
+        };
+      }
 
-    if (isValid && !normalizedSubjectSet.has(normalizeSubject(trimmedSubject))) {
-      isValid = false;
-    }
+      if (
+        taskDeadlineDate &&
+        parsedStudyDate >
+          taskDeadlineDate
+      ) {
+        return {
+          sessions: [],
+          rejectedCount,
+          rejectionReason:
+            `"${task.title}" is due before the selected study date. Move the study date earlier or extend the task deadline.`,
+        };
+      }
 
-    if (isValid && (startMinutes === null || endMinutes === null || endMinutes <= startMinutes)) {
-      isValid = false;
-    }
+      allowedDates.push(
+        parsedStudyDate,
+      );
+    } else {
+      if (
+        !startDate ||
+        !endDate
+      ) {
+        return {
+          sessions: [],
+          rejectedCount,
+          rejectionReason:
+            'Choose a valid weekly date range.',
+        };
+      }
 
-    if (isValid && (startMinutes === null || endMinutes === null || startMinutes < TIME_START_MINUTES || endMinutes > TIME_END_MINUTES)) {
-      isValid = false;
-    }
+      let currentDate =
+        startOfDay(startDate);
 
-    if (isValid && minStartMinutes !== null && maxEndMinutes !== null) {
-      if (startMinutes === null || endMinutes === null || startMinutes < minStartMinutes || endMinutes > maxEndMinutes) {
-        isValid = false;
+      const finalPlanningDate =
+        taskDeadlineDate &&
+        taskDeadlineDate < endDate
+          ? taskDeadlineDate
+          : endDate;
+
+      while (
+        currentDate <=
+        finalPlanningDate
+      ) {
+        if (
+          selectedDays.has(
+            currentDate.getDay(),
+          )
+        ) {
+          allowedDates.push(
+            new Date(currentDate),
+          );
+        }
+
+        currentDate =
+          addDays(currentDate, 1);
       }
     }
 
-  if (isValid && mode === 'single-day') {
-  if (
-    !normalizedSessionDate ||
-    !parsedStudyDate ||
-    !sameDay(normalizedSessionDate, parsedStudyDate)
-  ) {
-    isValid = false;
-  }
-}
+    if (
+      allowedDates.length === 0
+    ) {
+      return {
+        sessions: [],
+        rejectedCount,
+        rejectionReason:
+          `There are no selected study days available before the deadline for "${task.title}".`,
+      };
+    }
 
-if (isValid && mode === 'weekly') {
-  if (!normalizedSessionDate || !startDate || !endDate) {
-    isValid = false;
-  } else if (
-    normalizedSessionDate < startDate ||
-    normalizedSessionDate > endDate ||
-    !selectedDays.has(normalizedSessionDate.getDay())
-  ) {
-    isValid = false;
-  }
-}
+    const taskCandidates =
+      rawCandidates
+        .filter((session) => {
+          const taskId =
+            typeof session?.taskId ===
+            'string'
+              ? session.taskId.trim()
+              : '';
 
-if (isValid && normalizedSessionDate) {
-  const windowKey =
-    `${formatDateInput(normalizedSessionDate)}-` +
-    `${normalizedSessionStart}-` +
-    `${normalizedSessionEnd}`;
+          const subject =
+            typeof session?.subject ===
+            'string'
+              ? session.subject.trim()
+              : '';
 
-  if (seenWindows.has(windowKey)) {
-    isValid = false;
-  } else {
-    seenWindows.add(windowKey);
+          const title =
+            typeof session?.title ===
+            'string'
+              ? session.title.trim()
+              : '';
 
-    validSessions.push({
-      title: trimmedTitle,
-      subject: trimmedSubject,
-      date: formatDateInput(normalizedSessionDate),
-      startTime: normalizedSessionStart,
-      endTime: normalizedSessionEnd,
-    });
-  }
-} else if (isValid) {
-  isValid = false;
-}
+          return (
+            taskId === task.id &&
+            Boolean(title) &&
+            normalizeSubject(
+              subject,
+            ) ===
+              normalizeSubject(
+                task.subject ?? '',
+              )
+          );
+        })
+        .map((session) => ({
+          taskId: task.id,
+          title:
+            session.title.trim(),
+          subject:
+            task.subject ??
+            'General study',
+          focusTopics:
+            Array.isArray(
+              session.focusTopics,
+            )
+              ? session.focusTopics
+                  .filter(
+                    (
+                      topic,
+                    ): topic is string =>
+                      typeof topic ===
+                      'string',
+                  )
+                  .map((topic) =>
+                    topic.trim(),
+                  )
+                  .filter(Boolean)
+              : [],
+        }));
 
-    if (!isValid) {
+    if (
+      taskCandidates.length === 0
+    ) {
       rejectedCount += 1;
     }
-  }
 
-  if (validSessions.length === 0 && rejectedCount > 0) {
-    if (!requestedSubjects.length) {
-      rejectionReason = 'No valid sessions matched your selected days and times.';
-    } else if (mode === 'single-day') {
-      rejectionReason = 'No valid sessions matched your selected days and times.';
-    } else {
-      rejectionReason = 'No valid sessions matched your selected days and times.';
+    type ContentDescriptor = {
+      title: string;
+      focusTopics: string[];
+    };
+
+    const descriptors:
+      ContentDescriptor[] = [];
+
+    const descriptorKeys =
+      new Set<string>();
+
+    const addDescriptor = (
+      descriptor:
+        ContentDescriptor,
+      preferFront = false,
+    ) => {
+      const key =
+        `${normalizeSubject(
+          descriptor.title,
+        )}|${descriptor.focusTopics
+          .map(normalizeSubject)
+          .sort()
+          .join('|')}`;
+
+      if (
+        descriptorKeys.has(key)
+      ) {
+        return;
+      }
+
+      descriptorKeys.add(key);
+
+      if (preferFront) {
+        descriptors.unshift(
+          descriptor,
+        );
+      } else {
+        descriptors.push(
+          descriptor,
+        );
+      }
+    };
+
+    const overviewCandidate =
+      taskCandidates.find(
+        (candidate) =>
+          /overview|fundamental|introduction|reading|material review/i.test(
+            candidate.title,
+          ),
+      );
+
+    if (overviewCandidate) {
+      addDescriptor(
+        {
+          title:
+            overviewCandidate.title,
+          focusTopics:
+            overviewCandidate.focusTopics,
+        },
+        true,
+      );
+    }
+
+    const selectedDifficultTopics =
+      task.selectedDifficultTopics ??
+      [];
+
+    for (
+      const difficultTopic
+      of selectedDifficultTopics
+    ) {
+      const normalizedDifficultTopic =
+        normalizeSubject(
+          difficultTopic,
+        );
+
+      const matchingCandidate =
+        taskCandidates.find(
+          (candidate) =>
+            candidate.focusTopics.some(
+              (topic) => {
+                const normalizedTopic =
+                  normalizeSubject(
+                    topic,
+                  );
+
+                return (
+                  normalizedTopic ===
+                    normalizedDifficultTopic ||
+                  normalizedTopic.includes(
+                    normalizedDifficultTopic,
+                  ) ||
+                  normalizedDifficultTopic.includes(
+                    normalizedTopic,
+                  )
+                );
+              },
+            ) ||
+            normalizeSubject(
+              candidate.title,
+            ).includes(
+              normalizedDifficultTopic,
+            ),
+        );
+
+      addDescriptor({
+        title:
+          matchingCandidate?.title ??
+          `Review ${difficultTopic}`,
+        focusTopics:
+          matchingCandidate
+            ?.focusTopics
+            .length
+            ? matchingCandidate.focusTopics
+            : [difficultTopic],
+      });
+    }
+
+    for (
+      const candidate
+      of taskCandidates
+    ) {
+      addDescriptor({
+        title: candidate.title,
+        focusTopics:
+          candidate.focusTopics,
+      });
+    }
+
+    for (
+      const topic
+      of task.pdfDetectedTopics ??
+      []
+    ) {
+      addDescriptor({
+        title:
+          `Study ${topic}`,
+        focusTopics: [topic],
+      });
+    }
+
+    if (
+      descriptors.length === 0
+    ) {
+      addDescriptor({
+        title: task.title,
+        focusTopics: [],
+      });
+    }
+
+    const taskPreferredStart =
+      task.preferredStartTime
+        ? parseTimeToMinutes(
+            task.preferredStartTime,
+          )
+        : null;
+
+    const taskPreferredEnd =
+      task.preferredEndTime
+        ? parseTimeToMinutes(
+            task.preferredEndTime,
+          )
+        : null;
+
+    let dailyStartMinutes =
+      formStartMinutes;
+
+    let dailyEndMinutes =
+      formEndMinutes;
+
+    if (
+      taskPreferredStart !== null &&
+      taskPreferredEnd !== null &&
+      taskPreferredEnd >
+        taskPreferredStart
+    ) {
+      const intersectionStart =
+        Math.max(
+          formStartMinutes,
+          taskPreferredStart,
+        );
+
+      const intersectionEnd =
+        Math.min(
+          formEndMinutes,
+          taskPreferredEnd,
+        );
+
+      if (
+        intersectionEnd >
+        intersectionStart
+      ) {
+        dailyStartMinutes =
+          intersectionStart;
+        dailyEndMinutes =
+          intersectionEnd;
+      }
+    }
+
+    const targetMinutes =
+      Math.max(
+        15,
+        task.estimatedMinutes ??
+          60,
+      );
+
+    let remainingMinutes =
+      targetMinutes;
+
+    let descriptorIndex = 0;
+
+    for (
+      const allowedDate
+      of allowedDates
+    ) {
+      if (
+        remainingMinutes <= 0
+      ) {
+        break;
+      }
+
+      let dayEndMinutes =
+        dailyEndMinutes;
+
+      if (
+        taskDeadlineDate &&
+        sameDay(
+          allowedDate,
+          taskDeadlineDate,
+        ) &&
+        task.deadlineTime
+      ) {
+        const deadlineMinutes =
+          parseTimeToMinutes(
+            task.deadlineTime,
+          );
+
+        if (
+          deadlineMinutes !== null
+        ) {
+          dayEndMinutes =
+            Math.min(
+              dayEndMinutes,
+              deadlineMinutes,
+            );
+        }
+      }
+
+      let cursorMinutes =
+        dailyStartMinutes;
+
+      while (
+        remainingMinutes > 0 &&
+        cursorMinutes <
+          dayEndMinutes
+      ) {
+        const availableMinutes =
+          dayEndMinutes -
+          cursorMinutes;
+
+        const sessionMinutes =
+          Math.min(
+            form.sessionLength,
+            remainingMinutes,
+            availableMinutes,
+          );
+
+        if (
+          sessionMinutes < 15
+        ) {
+          break;
+        }
+
+        let descriptor =
+          descriptors[
+            Math.min(
+              descriptorIndex,
+              descriptors.length - 1,
+            )
+          ];
+
+        if (
+          descriptorIndex >=
+            descriptors.length
+        ) {
+          const isFinalSession =
+            remainingMinutes <=
+            form.sessionLength;
+
+          descriptor =
+            isFinalSession
+              ? {
+                  title:
+                    `Final review and self-test: ${task.title}`,
+                  focusTopics:
+                    selectedDifficultTopics.length
+                      ? selectedDifficultTopics
+                      : (
+                          task.pdfDetectedTopics ??
+                          []
+                        ).slice(
+                          0,
+                          3,
+                        ),
+                }
+              : descriptors[
+                  descriptorIndex %
+                    descriptors.length
+                ];
+        }
+
+        normalizedSessions.push({
+          taskId: task.id,
+          title:
+            descriptor.title,
+          subject:
+            task.subject ??
+            'General study',
+          focusTopics:
+            descriptor.focusTopics,
+          date:
+            formatDateInput(
+              allowedDate,
+            ),
+          startTime:
+            minutesToTimeString(
+              cursorMinutes,
+            ),
+          endTime:
+            minutesToTimeString(
+              cursorMinutes +
+                sessionMinutes,
+            ),
+        });
+
+        remainingMinutes -=
+          sessionMinutes;
+
+        descriptorIndex += 1;
+
+        // Keep a short break only if
+        // another session can still fit
+        // on this same day.
+        const nextCursorWithBreak =
+          cursorMinutes +
+          sessionMinutes +
+          15;
+
+        cursorMinutes =
+          nextCursorWithBreak +
+            15 <=
+          dayEndMinutes
+            ? nextCursorWithBreak
+            : cursorMinutes +
+              sessionMinutes;
+      }
+    }
+
+    if (
+      remainingMinutes > 0
+    ) {
+      return {
+        sessions: [],
+        rejectedCount,
+        rejectionReason:
+          `There is not enough available study time before the deadline for "${task.title}". Add more study days, extend the daily time window, or move the deadline later. ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} still need to be scheduled.`,
+      };
     }
   }
 
   return {
-    sessions: validSessions,
+    sessions:
+      normalizedSessions,
     rejectedCount,
-    rejectionReason: rejectionReason || undefined,
   };
 }
 
@@ -919,6 +1572,7 @@ function getTaskFormDefaults(
   return {
     title: task?.title ?? '',
     subject: task?.subject ?? '',
+    difficultTopics: task?.difficultTopics ?? '',
     taskType: task?.taskType ?? 'assignment',
 
     deadlineDate:
@@ -1059,6 +1713,8 @@ export default function StudyPlannerScreen() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
   const [selectedTask, setSelectedTask] = useState<StudyTask | null>(null);
+  const [taskPendingDelete, setTaskPendingDelete] =
+    useState<StudyTask | null>(null);
   const [showUnscheduledTasks, setShowUnscheduledTasks] = useState(true);
   const [showAIPlannerModal, setShowAIPlannerModal] = useState(false);
   const [showAIPlanPreviewModal, setShowAIPlanPreviewModal] = useState(false);
@@ -1072,6 +1728,17 @@ export default function StudyPlannerScreen() {
   useState<TaskFormState>(() =>
     getTaskFormDefaults(startOfDay(new Date())),
   );
+
+  const [selectedPdf, setSelectedPdf] =
+    useState<SelectedPdf | null>(null);
+  const [pdfAnalysis, setPdfAnalysis] =
+    useState<PdfAnalysis | null>(null);
+  const [isAnalyzingPdf, setIsAnalyzingPdf] =
+    useState(false);
+  const [pdfAnalysisError, setPdfAnalysisError] =
+    useState('');
+  const [selectedDifficultTopics, setSelectedDifficultTopics] =
+    useState<string[]>([]);
 
   const weekDays = useMemo(() => {
     const today = startOfDay(new Date());
@@ -1181,6 +1848,63 @@ export default function StudyPlannerScreen() {
               data.source === 'manual' || data.source === 'ai'
                 ? data.source
                 : null,
+
+            difficultTopics:
+              typeof data.difficultTopics === 'string'
+                ? data.difficultTopics
+                : null,
+
+            pdfName:
+              typeof data.pdfName === 'string'
+                ? data.pdfName
+                : null,
+
+            pdfMimeType:
+              typeof data.pdfMimeType === 'string'
+                ? data.pdfMimeType
+                : null,
+
+            pdfSize:
+              typeof data.pdfSize === 'number'
+                ? data.pdfSize
+                : null,
+
+            pdfDocumentTitle:
+              typeof data.pdfDocumentTitle === 'string'
+                ? data.pdfDocumentTitle
+                : null,
+
+            pdfPageCount:
+              typeof data.pdfPageCount === 'number'
+                ? data.pdfPageCount
+                : null,
+
+            pdfSummary:
+              typeof data.pdfSummary === 'string'
+                ? data.pdfSummary
+                : null,
+
+            pdfDetectedTopics:
+              Array.isArray(data.pdfDetectedTopics)
+                ? data.pdfDetectedTopics.filter(
+                    (topic): topic is string =>
+                      typeof topic === 'string',
+                  )
+                : [],
+
+            selectedDifficultTopics:
+              Array.isArray(data.selectedDifficultTopics)
+                ? data.selectedDifficultTopics.filter(
+                    (topic): topic is string =>
+                      typeof topic === 'string',
+                  )
+                : [],
+
+            planStatus:
+              data.planStatus === 'pending' ||
+              data.planStatus === 'scheduled'
+                ? data.planStatus
+                : null,
           };
         });
 
@@ -1225,7 +1949,8 @@ export default function StudyPlannerScreen() {
       .filter(
         (task) =>
           task.kind === 'task' &&
-          !task.completed,
+          !task.completed &&
+          task.planStatus !== 'scheduled',
       )
       .sort((firstTask, secondTask) => {
         const firstDeadline =
@@ -1264,8 +1989,19 @@ export default function StudyPlannerScreen() {
 
   const unscheduledTasks = useMemo(() => {
     return tasks
-      .filter((task) => !isTaskScheduled(task))
-      .sort((firstTask, secondTask) => secondTask.createdAt - firstTask.createdAt);
+      .filter(
+        (task) =>
+          !isTaskScheduled(task) &&
+          !(
+            task.kind === 'task' &&
+            task.planStatus === 'scheduled'
+          ),
+      )
+      .sort(
+        (firstTask, secondTask) =>
+          secondTask.createdAt -
+          firstTask.createdAt,
+      );
   }, [tasks]);
 
   useEffect(() => {
@@ -1344,6 +2080,245 @@ export default function StudyPlannerScreen() {
 
   const activeTimePickerList = activePicker === 'startTime' || activePicker === 'endTime';
 
+  const readSelectedPdfAsBase64 = async (
+    pdf: SelectedPdf,
+  ) => {
+    if (pdf.base64) {
+      return normalizeBase64Payload(pdf.base64);
+    }
+
+    if (!pdf.uri) {
+      throw new Error(
+        'The original PDF is no longer available. Please select it again.',
+      );
+    }
+
+    const file = new File(pdf.uri);
+    return file.base64();
+  };
+
+  const analyzeStudyPdf = async (
+    pdf: SelectedPdf,
+  ) => {
+    if (isAnalyzingPdf) {
+      return;
+    }
+
+    if (
+      pdf.size &&
+      pdf.size > MAX_INLINE_PDF_BYTES
+    ) {
+      setPdfAnalysis(null);
+      setPdfAnalysisError(
+        'This PDF is too large for direct AI analysis. Choose a PDF smaller than about 14 MB.',
+      );
+      return;
+    }
+
+    try {
+      setIsAnalyzingPdf(true);
+      setPdfAnalysisError('');
+      setFormError('');
+
+      const base64Data =
+        await readSelectedPdfAsBase64(pdf);
+
+      if (!base64Data) {
+        throw new Error(
+          'The PDF could not be read.',
+        );
+      }
+
+      const analysisPrompt = [
+        'Analyze this study PDF for a student.',
+        'Return JSON only. No Markdown and no explanation outside JSON.',
+        'Use this exact structure:',
+        '{"title":"Chapter title","pageCount":42,"summary":"2-4 sentence chapter summary","detectedTopics":["Topic 1","Topic 2","Topic 3"]}',
+        'Requirements:',
+        '- Detect 5 to 12 concrete study topics actually covered by the PDF.',
+        '- Keep topic names short and student-friendly.',
+        '- Include important concepts, formulas, methods, diagrams, or problem types when present.',
+        '- Do not invent topics not supported by the PDF.',
+        '- pageCount should be a number if you can determine it reliably; otherwise use null.',
+        '- summary should explain what the student needs to learn from this material.',
+      ].join('\n');
+
+      const response =
+        await AI_MODEL.generateContent({
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType:
+                      'application/pdf',
+                    data: base64Data,
+                  },
+                },
+                { text: analysisPrompt },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseMimeType:
+              'application/json',
+            temperature: 0.1,
+            maxOutputTokens: 1400,
+          },
+        });
+
+      const rawText =
+        response.response.text();
+
+      const parsedAnalysis =
+        parsePdfAnalysisResponse(rawText);
+
+      if (!parsedAnalysis) {
+        setPdfAnalysis(null);
+        setPdfAnalysisError(
+          'The AI could not extract a reliable topic list from this PDF. Try another PDF or analyze again.',
+        );
+        return;
+      }
+
+      setPdfAnalysis(parsedAnalysis);
+
+      setSelectedDifficultTopics(
+        (currentTopics) =>
+          currentTopics.filter((topic) =>
+            parsedAnalysis.detectedTopics.includes(
+              topic,
+            ),
+          ),
+      );
+    } catch (error) {
+      console.error(
+        'Failed to analyze PDF:',
+        error,
+      );
+      setPdfAnalysis(null);
+      setPdfAnalysisError(
+        getAiServiceErrorMessage(error),
+      );
+    } finally {
+      setIsAnalyzingPdf(false);
+    }
+  };
+
+  const pickStudyPdf = async () => {
+    if (isSavingTask || isAnalyzingPdf) {
+      return;
+    }
+
+    try {
+      setFormError('');
+      setPdfAnalysisError('');
+
+      const result =
+        await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          copyToCacheDirectory: true,
+          multiple: false,
+
+          // Expo returns base64 directly on web.
+          base64: true,
+        });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const asset = result.assets[0];
+
+      if (!asset) {
+        setFormError(
+          'No PDF file was selected.',
+        );
+        return;
+      }
+
+      const isPdf =
+        asset.mimeType === 'application/pdf' ||
+        asset.name
+          .toLowerCase()
+          .endsWith('.pdf');
+
+      if (!isPdf) {
+        setFormError(
+          'Please choose a PDF file.',
+        );
+        return;
+      }
+
+      if (
+        typeof asset.size === 'number' &&
+        asset.size > MAX_INLINE_PDF_BYTES
+      ) {
+        setSelectedPdf(null);
+        setPdfAnalysis(null);
+        setSelectedDifficultTopics([]);
+        setPdfAnalysisError(
+          'This PDF is too large for direct AI analysis. Choose a PDF smaller than about 14 MB.',
+        );
+        return;
+      }
+
+      const nextPdf: SelectedPdf = {
+        name: asset.name,
+        uri: asset.uri,
+        mimeType:
+          asset.mimeType ??
+          'application/pdf',
+        size: asset.size ?? null,
+        base64:
+          typeof asset.base64 === 'string'
+            ? asset.base64
+            : null,
+      };
+
+      setSelectedPdf(nextPdf);
+      setPdfAnalysis(null);
+      setSelectedDifficultTopics([]);
+
+      // Analyze immediately so upload is meaningful.
+      await analyzeStudyPdf(nextPdf);
+    } catch (error) {
+      console.error(
+        'Failed to select PDF:',
+        error,
+      );
+      setFormError(
+        'The PDF could not be selected.',
+      );
+    }
+  };
+
+  const removeStudyPdf = () => {
+    if (isSavingTask || isAnalyzingPdf) {
+      return;
+    }
+
+    setSelectedPdf(null);
+    setPdfAnalysis(null);
+    setPdfAnalysisError('');
+    setSelectedDifficultTopics([]);
+  };
+
+  const toggleDetectedDifficultTopic = (
+    topic: string,
+  ) => {
+    setSelectedDifficultTopics(
+      (currentTopics) =>
+        currentTopics.includes(topic)
+          ? currentTopics.filter(
+              (currentTopic) =>
+                currentTopic !== topic,
+            )
+          : [...currentTopics, topic],
+    );
+  };
+
   const openAddTaskModal = () => {
     if (!userId) {
       return;
@@ -1352,6 +2327,10 @@ export default function StudyPlannerScreen() {
     setEditingTaskId(null);
     setFormError('');
     setActiveTaskDropdown(null);
+    setSelectedPdf(null);
+    setPdfAnalysis(null);
+    setPdfAnalysisError('');
+    setSelectedDifficultTopics([]);
     setTaskForm(getTaskFormDefaults(selectedDate));
     setCalendarMonth(selectedDate);
     setActivePicker(null);
@@ -1388,7 +2367,7 @@ export default function StudyPlannerScreen() {
     setAIPlanError('');
     setAIPlanSessions([]);
     setAIPlanForm(nextForm);
-    setPlanningMode('single-day');
+    setPlanningMode('weekly');
     setCalendarMonth(selectedDate);
     setActivePicker(null);
     setPickerTarget('ai-study-date');
@@ -1406,6 +2385,10 @@ export default function StudyPlannerScreen() {
     setPickerTarget('task-form');
     setFormError('');
     setEditingTaskId(null);
+    setSelectedPdf(null);
+    setPdfAnalysis(null);
+    setPdfAnalysisError('');
+    setSelectedDifficultTopics([]);
     setTaskForm(getTaskFormDefaults(selectedDate));
   };
 
@@ -1525,7 +2508,42 @@ export default function StudyPlannerScreen() {
     setEditingTaskId(task.id);
     setFormError('');
     setActiveTaskDropdown(null);
-    setTaskForm(getTaskFormDefaults(taskDate, task));
+    setSelectedPdf(
+      task.pdfName
+        ? {
+            name: task.pdfName,
+            uri: null,
+            mimeType:
+              task.pdfMimeType ?? null,
+            size: task.pdfSize ?? null,
+            base64: null,
+          }
+        : null,
+    );
+
+    setPdfAnalysis(
+      task.pdfSummary
+        ? {
+            title:
+              task.pdfDocumentTitle ??
+              'Uploaded study material',
+            pageCount:
+              task.pdfPageCount ?? null,
+            summary: task.pdfSummary,
+            detectedTopics:
+              task.pdfDetectedTopics ?? [],
+          }
+        : null,
+    );
+
+    setPdfAnalysisError('');
+    setSelectedDifficultTopics(
+      task.selectedDifficultTopics ?? [],
+    );
+
+    setTaskForm(
+      getTaskFormDefaults(taskDate, task),
+    );
     setCalendarMonth(taskDate);
     setActivePicker(null);
     setPickerTarget('task-form');
@@ -1565,6 +2583,43 @@ export default function StudyPlannerScreen() {
     setActivePicker(null);
     setPickerTarget('task-form');
   };
+
+  const includedAIPlanMinutes = useMemo(
+    () =>
+      aiPlanSessions
+        .filter(
+          (session) =>
+            session.included,
+        )
+        .reduce(
+          (total, session) => {
+            const start =
+              parseTimeToMinutes(
+                session.startTime,
+              );
+
+            const end =
+              parseTimeToMinutes(
+                session.endTime,
+              );
+
+            if (
+              start === null ||
+              end === null ||
+              end <= start
+            ) {
+              return total;
+            }
+
+            return (
+              total +
+              (end - start)
+            );
+          },
+          0,
+        ),
+    [aiPlanSessions],
+  );
 
   const closeAIPlanPreview = () => {
     if (isSavingAIPlan) {
@@ -1651,7 +2706,12 @@ export default function StudyPlannerScreen() {
         return;
       }
 
-      const validationResult = validateGeneratedSessions(planningMode, aiPlanForm, parsedPlan.sessions);
+      const validationResult = validateGeneratedSessions(
+        planningMode,
+        aiPlanForm,
+        pendingStudyTasks,
+        parsedPlan.sessions,
+      );
 
       if (__DEV__) {
         console.log('AI planner validation summary', {
@@ -1669,9 +2729,15 @@ export default function StudyPlannerScreen() {
 
       const previewSessions = validationResult.sessions
         .map((session, index) => ({
-          id: getPlannedSessionId(session, index),
+          id: getPlannedSessionId(
+            session,
+            index,
+          ),
+          taskId: session.taskId,
           title: session.title,
           subject: session.subject,
+          focusTopics:
+            session.focusTopics,
           date: session.date,
           startTime: session.startTime,
           endTime: session.endTime,
@@ -1706,14 +2772,25 @@ export default function StudyPlannerScreen() {
   };
 
   const saveAIStudyPlan = async () => {
-    if (!userId || isSavingAIPlan) {
+    if (
+      !userId ||
+      isSavingAIPlan
+    ) {
       return;
     }
 
-    const includedSessions = aiPlanSessions.filter((session) => session.included);
+    const includedSessions =
+      aiPlanSessions.filter(
+        (session) =>
+          session.included,
+      );
 
-    if (includedSessions.length === 0) {
-      setAIPlanError('Include at least one session before saving.');
+    if (
+      includedSessions.length === 0
+    ) {
+      setAIPlanError(
+        'Include at least one session before saving.',
+      );
       return;
     }
 
@@ -1721,40 +2798,118 @@ export default function StudyPlannerScreen() {
       setIsSavingAIPlan(true);
       setAIPlanError('');
 
-      const batch = writeBatch(db);
+      const batch =
+        writeBatch(db);
 
-      includedSessions.forEach((session) => {
-        const taskDate = parseDateInput(session.date);
+      const scheduledTaskIds =
+        new Set<string>();
 
-        if (!taskDate) {
-          return;
-        }
+      includedSessions.forEach(
+        (session) => {
+          const taskDate =
+            parseDateInput(
+              session.date,
+            );
 
-        const taskReference = doc(collection(db, 'users', userId, 'tasks'));
+          if (!taskDate) {
+            return;
+          }
 
-        batch.set(taskReference, {
-          title: session.title,
-          subject: session.subject,
-          completed: false,
-          createdAt: Date.now(),
-          date: formatDateInput(taskDate),
-          dueDate: formatDateInput(taskDate),
-          startTime: normalizeTimeInput(session.startTime) || session.startTime,
-          endTime: normalizeTimeInput(session.endTime) || session.endTime,
-          source: 'ai',
-          kind: 'session',
-          planningMode,
-        });
-      });
+          const sessionReference =
+            doc(
+              collection(
+                db,
+                'users',
+                userId,
+                'tasks',
+              ),
+            );
+
+          batch.set(
+            sessionReference,
+            {
+              title: session.title,
+              subject:
+                session.subject,
+              focusTopics:
+                session.focusTopics,
+              parentTaskId:
+                session.taskId,
+              completed: false,
+              createdAt:
+                Date.now(),
+              date:
+                formatDateInput(
+                  taskDate,
+                ),
+              dueDate:
+                formatDateInput(
+                  taskDate,
+                ),
+              startTime:
+                normalizeTimeInput(
+                  session.startTime,
+                ) ||
+                session.startTime,
+              endTime:
+                normalizeTimeInput(
+                  session.endTime,
+                ) ||
+                session.endTime,
+              source: 'ai',
+              kind: 'session',
+              planningMode,
+            },
+          );
+
+          scheduledTaskIds.add(
+            session.taskId,
+          );
+        },
+      );
+
+      scheduledTaskIds.forEach(
+        (taskId) => {
+          const taskReference =
+            doc(
+              db,
+              'users',
+              userId,
+              'tasks',
+              taskId,
+            );
+
+          batch.update(
+            taskReference,
+            {
+              planStatus:
+                'scheduled',
+              scheduledAt:
+                Date.now(),
+            },
+          );
+        },
+      );
 
       await batch.commit();
 
-      setShowAIPlanPreviewModal(false);
+      setShowAIPlanPreviewModal(
+        false,
+      );
       setAIPlanSessions([]);
-      setAIPlanForm(getAiDefaultForm(selectedDate));
+      setAIPlanForm(
+        getAiDefaultForm(
+          selectedDate,
+        ),
+      );
     } catch (error) {
-      console.error('Failed to save AI study plan:', error);
-      setAIPlanError('The AI study plan could not be saved.');
+      console.error(
+        'Failed to save AI study plan:',
+        error,
+      );
+      setAIPlanError(
+        'The AI study plan could not be saved.',
+      );
     } finally {
       setIsSavingAIPlan(false);
     }
@@ -1869,6 +3024,19 @@ export default function StudyPlannerScreen() {
           kind: 'task',
           title: taskForm.title.trim(),
           subject: taskForm.subject.trim(),
+          difficultTopics: taskForm.difficultTopics.trim(),
+          pdfName: selectedPdf?.name ?? null,
+          pdfMimeType: selectedPdf?.mimeType ?? null,
+          pdfSize: selectedPdf?.size ?? null,
+          pdfDocumentTitle:
+            pdfAnalysis?.title ?? null,
+          pdfPageCount:
+            pdfAnalysis?.pageCount ?? null,
+          pdfSummary:
+            pdfAnalysis?.summary ?? null,
+          pdfDetectedTopics:
+            pdfAnalysis?.detectedTopics ?? [],
+          selectedDifficultTopics,
           taskType: taskForm.taskType,
           deadlineDate: formatDateInput(deadlineDate),
           deadlineTime,
@@ -1880,6 +3048,7 @@ export default function StudyPlannerScreen() {
           completed: false,
           createdAt: Date.now(),
           source: 'manual',
+          planStatus: 'pending',
 
           // A pending task is not a scheduled session.
           date: null,
@@ -1949,6 +3118,19 @@ export default function StudyPlannerScreen() {
         kind: 'task',
         title: taskForm.title.trim(),
         subject: taskForm.subject.trim(),
+        difficultTopics: taskForm.difficultTopics.trim(),
+        pdfName: selectedPdf?.name ?? null,
+        pdfMimeType: selectedPdf?.mimeType ?? null,
+        pdfSize: selectedPdf?.size ?? null,
+        pdfDocumentTitle:
+          pdfAnalysis?.title ?? null,
+        pdfPageCount:
+          pdfAnalysis?.pageCount ?? null,
+        pdfSummary:
+          pdfAnalysis?.summary ?? null,
+        pdfDetectedTopics:
+          pdfAnalysis?.detectedTopics ?? [],
+        selectedDifficultTopics,
         taskType: taskForm.taskType,
         deadlineDate: formatDateInput(deadlineDate),
         deadlineTime,
@@ -1996,20 +3178,7 @@ export default function StudyPlannerScreen() {
   };
 
   const confirmDeleteTask = (task: StudyTask) => {
-    Alert.alert(
-      'Delete task?',
-      'This task will be removed from your planner.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            void deleteTask(task.id);
-          },
-        },
-      ],
-    );
+    setTaskPendingDelete(task);
   };
 
   const deleteTask = async (taskId: string) => {
@@ -2023,6 +3192,10 @@ export default function StudyPlannerScreen() {
       const taskReference = doc(db, 'users', userId, 'tasks', taskId);
 
       await deleteDoc(taskReference);
+
+      if (taskPendingDelete?.id === taskId) {
+        setTaskPendingDelete(null);
+      }
 
       if (editingTaskId === taskId) {
         closeTaskFormModal();
@@ -2266,12 +3439,42 @@ export default function StudyPlannerScreen() {
               })}
 
               {scheduledDayTasks.map((task, index) => {
-                const startMinutes = parseTimeToMinutes(task.startTime ?? '') ?? TIMELINE_START_HOUR * 60;
-                const endMinutes = parseTimeToMinutes(task.endTime ?? '') ?? startMinutes + 45;
-                const clampedStart = Math.max(startMinutes, TIMELINE_START_HOUR * 60);
-                const clampedEnd = Math.min(endMinutes, TIMELINE_END_HOUR * 60);
-                const taskTop = ((clampedStart - TIMELINE_START_HOUR * 60) / 60) * hourSlotHeight + 6;
-                const taskHeight = Math.max(((clampedEnd - clampedStart) / 60) * hourSlotHeight - 8, 54);
+                const startMinutes =
+                  parseTimeToMinutes(task.startTime ?? '') ??
+                  TIMELINE_START_HOUR * 60;
+
+                const endMinutes =
+                  parseTimeToMinutes(task.endTime ?? '') ??
+                  startMinutes + 45;
+
+                const clampedStart = Math.max(
+                  startMinutes,
+                  TIMELINE_START_HOUR * 60,
+                );
+
+                const clampedEnd = Math.min(
+                  endMinutes,
+                  TIMELINE_END_HOUR * 60,
+                );
+
+                const durationMinutes = Math.max(
+                  1,
+                  clampedEnd - clampedStart,
+                );
+
+                const taskTop =
+                  ((clampedStart - TIMELINE_START_HOUR * 60) / 60) *
+                    hourSlotHeight +
+                  2;
+
+                // Keep the block faithful to the actual time duration.
+                // The old 54px minimum made 15/30-minute sessions overlap badly.
+                const taskHeight = Math.max(
+                  (durationMinutes / 60) * hourSlotHeight - 3,
+                  14,
+                );
+
+                const isCompactTask = durationMinutes <= 30;
                 const palette = timelineTaskPalette(index);
 
                 return (
@@ -2288,7 +3491,9 @@ export default function StudyPlannerScreen() {
                         shadowColor: palette.accent,
                         left: labelColumnWidth + 12,
                         right: 8,
-                        opacity: task.completed ? 0.78 : pressed ? 0.94 : 1,
+                        opacity: task.completed ? 0.7 : pressed ? 0.94 : 1,
+                        paddingVertical: isCompactTask ? 1 : 6,
+                        zIndex: index + 1,
                       },
                     ]}
                   >
@@ -2299,8 +3504,16 @@ export default function StudyPlannerScreen() {
                           style={[
                             styles.timelineTaskTitle,
                             {
-                              color: task.completed ? theme.textMuted : theme.text,
-                              textDecorationLine: task.completed ? 'line-through' : 'none',
+                              color: task.completed
+                                ? theme.textMuted
+                                : theme.text,
+                              textDecorationLine: task.completed
+                                ? 'line-through'
+                                : 'none',
+                              fontSize: isCompactTask
+                                ? Typography.caption
+                                : Typography.body - 1,
+                              lineHeight: isCompactTask ? 13 : 18,
                             },
                           ]}
                           numberOfLines={1}
@@ -2308,14 +3521,60 @@ export default function StudyPlannerScreen() {
                           {task.title}
                         </Text>
 
-                        <Text style={[styles.timelineTaskTime, { color: theme.textMuted }]} numberOfLines={1}>
-                          {task.subject ? `${task.subject} | ${getTaskTimeRange(task)}` : getTaskTimeRange(task)}
-                        </Text>
+                        {!isCompactTask ? (
+                          <Text
+                            style={[
+                              styles.timelineTaskTime,
+                              { color: theme.textMuted },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {task.subject
+                              ? `${task.subject} • ${getTaskTimeRange(task)}`
+                              : getTaskTimeRange(task)}
+                          </Text>
+                        ) : null}
                       </View>
 
-                      <View style={[styles.taskStatusDot, { backgroundColor: task.completed ? '#4ADE80' : palette.accent }]}>
-                        <Ionicons name={task.completed ? 'checkmark' : 'ellipse'} size={10} color={task.completed ? '#FFFFFF' : palette.accent} />
+                      <View
+                        style={[
+                          styles.taskStatusDot,
+                          {
+                            backgroundColor: task.completed
+                              ? '#4ADE80'
+                              : palette.accent,
+                            height: isCompactTask ? 16 : 20,
+                            width: isCompactTask ? 16 : 20,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={task.completed ? 'checkmark' : 'ellipse'}
+                          size={isCompactTask ? 8 : 10}
+                          color={
+                            task.completed
+                              ? '#FFFFFF'
+                              : palette.accent
+                          }
+                        />
                       </View>
+
+                      {!isCompactTask ? (
+                        <Pressable
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            confirmDeleteTask(task);
+                          }}
+                          hitSlop={8}
+                          style={styles.timelineDeleteButton}
+                        >
+                          <Ionicons
+                            name="trash-outline"
+                            size={16}
+                            color={theme.error}
+                          />
+                        </Pressable>
+                      ) : null}
                     </View>
                   </Pressable>
                 );
@@ -2375,7 +3634,13 @@ export default function StudyPlannerScreen() {
                           {task.title}
                         </Text>
 
-                        <Text style={[styles.unscheduledMeta, { color: theme.textMuted }]}>Tap for actions</Text>
+                        <Text style={[styles.unscheduledMeta, { color: theme.textMuted }]}>
+                          {task.pdfSummary
+                            ? `PDF analyzed • ${task.pdfDetectedTopics?.length ?? 0} topics`
+                            : task.selectedDifficultTopics?.length
+                              ? `${task.selectedDifficultTopics.length} focus topics`
+                              : 'Tap for actions'}
+                        </Text>
                       </View>
                     </Pressable>
                   );
@@ -2681,7 +3946,12 @@ export default function StudyPlannerScreen() {
             <View style={styles.modalHeader}>
               <View>
                 <Text style={[styles.sectionTitle, { color: theme.text }]}>{planningMode === 'single-day' ? 'Review your daily study plan' : 'Review your weekly study plan'}</Text>
-                <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>{aiPlanSessions.filter((session) => session.included).length} valid session{aiPlanSessions.filter((session) => session.included).length === 1 ? '' : 's'} selected</Text>
+                <Text style={[styles.sectionSubtitle, { color: theme.textMuted }]}>
+                  {aiPlanSessions.filter((session) => session.included).length} valid session
+                  {aiPlanSessions.filter((session) => session.included).length === 1 ? '' : 's'} selected
+                  {' • '}
+                  {includedAIPlanMinutes} min planned
+                </Text>
               </View>
 
               <Pressable onPress={closeAIPlanPreview} style={styles.modalCloseButton}>
@@ -2709,11 +3979,29 @@ export default function StudyPlannerScreen() {
                     <View style={styles.aiPlanSessionCopy}>
                       <Text style={[styles.aiPlanSessionTitle, { color: theme.text }]} numberOfLines={1}>{session.title}</Text>
                       <Text style={[styles.aiPlanSessionMeta, { color: theme.textMuted }]}>
-                        {session.subject} â€¢ {formatAiFriendlyDate(parseDateInput(session.date) ?? selectedDate)}
+                        {session.subject} • {formatAiFriendlyDate(parseDateInput(session.date) ?? selectedDate)}
                       </Text>
                       <Text style={[styles.aiPlanSessionMeta, { color: theme.textMuted }]}>
                         {formatTimeDisplay(session.startTime)} – {formatTimeDisplay(session.endTime)}
+                        {' • '}
+                        {Math.max(
+                          0,
+                          (parseTimeToMinutes(session.endTime) ?? 0) -
+                            (parseTimeToMinutes(session.startTime) ?? 0),
+                        )} min
                       </Text>
+
+                      {session.focusTopics.length > 0 ? (
+                        <Text
+                          style={[
+                            styles.aiPlanSessionMeta,
+                            { color: theme.textMuted },
+                          ]}
+                          numberOfLines={2}
+                        >
+                          Focus: {session.focusTopics.join(', ')}
+                        </Text>
+                      ) : null}
                     </View>
 
                     <View style={[styles.aiPlanSessionToggle, { backgroundColor: isIncluded ? theme.primary : theme.inputBackground, borderColor: isIncluded ? theme.primary : theme.border }]}>
@@ -3017,6 +4305,525 @@ export default function StudyPlannerScreen() {
                     },
                   ]}
                 />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Study material
+                </Text>
+
+                <Pressable
+                  onPress={() => {
+                    void pickStudyPdf();
+                  }}
+                  disabled={
+                    isSavingTask ||
+                    isAnalyzingPdf
+                  }
+                  style={({ pressed }) => [
+                    styles.selectorButton,
+                    {
+                      backgroundColor:
+                        theme.inputBackground,
+                      borderColor: selectedPdf
+                        ? theme.primary
+                        : theme.border,
+                      opacity:
+                        isSavingTask ||
+                        isAnalyzingPdf
+                          ? 0.6
+                          : pressed
+                            ? 0.94
+                            : 1,
+                    },
+                  ]}
+                >
+                  <View style={styles.selectorRow}>
+                    <Ionicons
+                      name="document-attach-outline"
+                      size={18}
+                      color={theme.primary}
+                    />
+
+                    <Text
+                      style={[
+                        styles.selectorButtonText,
+                        { color: theme.text },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {selectedPdf
+                        ? 'Change chapter PDF'
+                        : 'Upload chapter PDF'}
+                    </Text>
+                  </View>
+
+                  <Ionicons
+                    name="cloud-upload-outline"
+                    size={18}
+                    color={theme.textMuted}
+                  />
+                </Pressable>
+
+                {selectedPdf ? (
+                  <View
+                    style={[
+                      styles.pdfSelectedRow,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          theme.primary,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={
+                        styles.pdfSelectedCopy
+                      }
+                    >
+                      <Ionicons
+                        name="document-text-outline"
+                        size={18}
+                        color={theme.primary}
+                      />
+
+                      <View
+                        style={
+                          styles.pdfSelectedTextWrap
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.pdfSelectedName,
+                            { color: theme.text },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {selectedPdf.name}
+                        </Text>
+
+                        <Text
+                          style={[
+                            styles.pdfSelectedMeta,
+                            {
+                              color:
+                                theme.textMuted,
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {selectedPdf.size
+                            ? `${Math.max(
+                                1,
+                                Math.round(
+                                  selectedPdf.size /
+                                    1024,
+                                ),
+                              )} KB`
+                            : 'PDF selected'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Pressable
+                      onPress={removeStudyPdf}
+                      disabled={
+                        isSavingTask ||
+                        isAnalyzingPdf
+                      }
+                      style={
+                        styles.pdfRemoveButton
+                      }
+                    >
+                      <Ionicons
+                        name="trash-outline"
+                        size={18}
+                        color={theme.error}
+                      />
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {isAnalyzingPdf ? (
+                  <View
+                    style={[
+                      styles.pdfAnalysisStatus,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          theme.border,
+                      },
+                    ]}
+                  >
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.primary}
+                    />
+
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.pdfAnalysisStatusTitle,
+                          { color: theme.text },
+                        ]}
+                      >
+                        AI is reading your PDF...
+                      </Text>
+
+                      <Text
+                        style={[
+                          styles.fieldHint,
+                          {
+                            color:
+                              theme.textMuted,
+                          },
+                        ]}
+                      >
+                        Extracting chapter topics and
+                        study priorities.
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+
+                {pdfAnalysisError ? (
+                  <View
+                    style={[
+                      styles.pdfAnalysisStatus,
+                      {
+                        backgroundColor:
+                          'rgba(217, 83, 79, 0.08)',
+                        borderColor:
+                          'rgba(217, 83, 79, 0.28)',
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={18}
+                      color={theme.error}
+                    />
+
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.fieldHint,
+                          {
+                            color:
+                              theme.error,
+                          },
+                        ]}
+                      >
+                        {pdfAnalysisError}
+                      </Text>
+
+                      {selectedPdf?.uri ||
+                      selectedPdf?.base64 ? (
+                        <Pressable
+                          onPress={() => {
+                            if (selectedPdf) {
+                              void analyzeStudyPdf(
+                                selectedPdf,
+                              );
+                            }
+                          }}
+                          disabled={
+                            isAnalyzingPdf
+                          }
+                          style={
+                            styles.pdfRetryButton
+                          }
+                        >
+                          <Text
+                            style={[
+                              styles.pdfRetryButtonText,
+                              {
+                                color:
+                                  theme.primary,
+                              },
+                            ]}
+                          >
+                            Analyze again
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : null}
+
+                {pdfAnalysis ? (
+                  <View
+                    style={[
+                      styles.pdfAnalysisCard,
+                      {
+                        backgroundColor:
+                          theme.inputBackground,
+                        borderColor:
+                          theme.border,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={
+                        styles.pdfAnalysisHeader
+                      }
+                    >
+                      <View
+                        style={[
+                          styles.pdfAnalysisIcon,
+                          {
+                            backgroundColor:
+                              theme.surface,
+                            borderColor:
+                              theme.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="sparkles"
+                          size={17}
+                          color={theme.primary}
+                        />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.pdfAnalysisTitle,
+                            { color: theme.text },
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {pdfAnalysis.title}
+                        </Text>
+
+                        <Text
+                          style={[
+                            styles.pdfSelectedMeta,
+                            {
+                              color:
+                                theme.textMuted,
+                            },
+                          ]}
+                        >
+                          {pdfAnalysis.pageCount
+                            ? `${pdfAnalysis.pageCount} pages • AI analyzed`
+                            : 'AI analyzed'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Text
+                      style={[
+                        styles.pdfAnalysisSummary,
+                        {
+                          color:
+                            theme.textMuted,
+                        },
+                      ]}
+                    >
+                      {pdfAnalysis.summary}
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.fieldLabel,
+                        {
+                          color:
+                            theme.textMuted,
+                        },
+                      ]}
+                    >
+                      AI detected topics
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.fieldHint,
+                        {
+                          color:
+                            theme.textMuted,
+                        },
+                      ]}
+                    >
+                      Tap the topics that are
+                      difficult for you.
+                    </Text>
+
+                    <View
+                      style={
+                        styles.topicChipRow
+                      }
+                    >
+                      {pdfAnalysis.detectedTopics.map(
+                        (topic) => {
+                          const isSelected =
+                            selectedDifficultTopics.includes(
+                              topic,
+                            );
+
+                          return (
+                            <Pressable
+                              key={topic}
+                              onPress={() =>
+                                toggleDetectedDifficultTopic(
+                                  topic,
+                                )
+                              }
+                              style={({
+                                pressed,
+                              }) => [
+                                styles.topicChip,
+                                {
+                                  backgroundColor:
+                                    isSelected
+                                      ? theme.primary
+                                      : theme.surface,
+                                  borderColor:
+                                    isSelected
+                                      ? theme.primary
+                                      : theme.border,
+                                  opacity:
+                                    pressed
+                                      ? 0.92
+                                      : 1,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  isSelected
+                                    ? 'checkmark'
+                                    : 'add'
+                                }
+                                size={14}
+                                color={
+                                  isSelected
+                                    ? theme.buttonText
+                                    : theme.primary
+                                }
+                              />
+
+                              <Text
+                                style={[
+                                  styles.topicChipText,
+                                  {
+                                    color:
+                                      isSelected
+                                        ? theme.buttonText
+                                        : theme.text,
+                                  },
+                                ]}
+                              >
+                                {topic}
+                              </Text>
+                            </Pressable>
+                          );
+                        },
+                      )}
+                    </View>
+
+                    {selectedDifficultTopics.length >
+                    0 ? (
+                      <Text
+                        style={[
+                          styles.fieldHint,
+                          {
+                            color:
+                              theme.primary,
+                          },
+                        ]}
+                      >
+                        {
+                          selectedDifficultTopics.length
+                        }{' '}
+                        difficult topic
+                        {selectedDifficultTopics.length ===
+                        1
+                          ? ''
+                          : 's'}{' '}
+                        selected for extra focus.
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
+
+                {!selectedPdf ? (
+                  <Text
+                    style={[
+                      styles.fieldHint,
+                      {
+                        color:
+                          theme.textMuted,
+                      },
+                    ]}
+                  >
+                    Upload a chapter PDF and Gemini
+                    will extract its actual topics
+                    before the study plan is
+                    generated.
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  What is difficult for you?
+                </Text>
+
+                <TextInput
+                  value={taskForm.difficultTopics}
+                  onChangeText={(value) =>
+                    setTaskForm(
+                      (currentValue) => ({
+                        ...currentValue,
+                        difficultTopics: value,
+                      }),
+                    )
+                  }
+                  editable={!isSavingTask}
+                  placeholder="Example: I struggle with CSMA/CA backoff. Focus more on pages 20–35 and calculation questions."
+                  placeholderTextColor={
+                    theme.textMuted
+                  }
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  style={[
+                    styles.modalInput,
+                    styles.multiLineInput,
+                    {
+                      backgroundColor:
+                        theme.inputBackground,
+                      borderColor:
+                        theme.border,
+                      color: theme.text,
+                    },
+                  ]}
+                />
+
+                <Text
+                  style={[
+                    styles.fieldHint,
+                    { color: theme.textMuted },
+                  ]}
+                >
+                  Your notes and selected AI topics
+                  will get extra time, practice, and
+                  review in the generated plan.
+                </Text>
               </View>
 
               <View style={styles.formRow}>
@@ -3382,7 +5189,7 @@ export default function StudyPlannerScreen() {
                     { color: theme.textMuted },
                   ]}
                 >
-                  Preferred study window
+                  Available study hours
                 </Text>
 
                 <Text
@@ -3391,8 +5198,7 @@ export default function StudyPlannerScreen() {
                     { color: theme.textMuted },
                   ]}
                 >
-                  Tell the generator when you are normally
-                  available to study.
+                  Tell the generator when you are available to study each day.
                 </Text>
 
                 <View style={styles.formRow}>
@@ -3851,6 +5657,117 @@ export default function StudyPlannerScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={Boolean(taskPendingDelete)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTaskPendingDelete(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setTaskPendingDelete(null)}
+          />
+
+          <View
+            style={[
+              styles.deleteConfirmCard,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.deleteConfirmIcon,
+                {
+                  backgroundColor: 'rgba(217, 83, 79, 0.12)',
+                  borderColor: 'rgba(217, 83, 79, 0.25)',
+                },
+              ]}
+            >
+              <Ionicons
+                name="trash-outline"
+                size={24}
+                color="#D9534F"
+              />
+            </View>
+
+            <Text
+              style={[
+                styles.deleteConfirmTitle,
+                { color: theme.text },
+              ]}
+            >
+              Delete this study session?
+            </Text>
+
+            <Text
+              style={[
+                styles.deleteConfirmCopy,
+                { color: theme.textMuted },
+              ]}
+            >
+              {taskPendingDelete?.title ?? 'This session'} will be permanently
+              removed from your calendar and Firestore.
+            </Text>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                onPress={() => setTaskPendingDelete(null)}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  {
+                    backgroundColor: theme.inputBackground,
+                    borderColor: theme.border,
+                    opacity: pressed ? 0.92 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.secondaryButtonText,
+                    { color: theme.text },
+                  ]}
+                >
+                  Cancel
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  if (taskPendingDelete) {
+                    void deleteTask(taskPendingDelete.id);
+                  }
+                }}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  {
+                    backgroundColor: '#D9534F',
+                    opacity: pressed ? 0.9 : 1,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="trash-outline"
+                  size={17}
+                  color="#FFFFFF"
+                />
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    { color: '#FFFFFF' },
+                  ]}
+                >
+                  Delete
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={showTaskActionsModal} transparent animationType="fade" onRequestClose={closeTaskActionsModal}>
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeTaskActionsModal} />
@@ -3876,7 +5793,7 @@ export default function StudyPlannerScreen() {
                 </Text>
                 <Text style={[styles.taskPreviewMeta, { color: theme.textMuted }]}>
                   {getStoredTaskDate(selectedTask) ? formatLongDay(getStoredTaskDate(selectedTask) as Date) : 'No date'}
-                  {selectedTask.startTime && selectedTask.endTime ? ` â€¢ ${getTaskTimeRange(selectedTask)}` : ''}
+                  {selectedTask.startTime && selectedTask.endTime ? ` • ${getTaskTimeRange(selectedTask)}` : ''}
                 </Text>
               </View>
             ) : null}
@@ -4224,6 +6141,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 20,
   },
+  timelineDeleteButton: {
+    alignItems: 'center',
+    borderRadius: Radius.pill,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  deleteConfirmCard: {
+    alignSelf: 'center',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    gap: Spacing.md,
+    maxWidth: 420,
+    padding: Spacing.lg,
+    width: '100%',
+  },
+  deleteConfirmIcon: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  deleteConfirmTitle: {
+    fontSize: Typography.body + 2,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  deleteConfirmCopy: {
+    fontSize: Typography.caption + 1,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
   unscheduledCard: {
     borderRadius: Radius.lg,
     borderWidth: 1,
@@ -4451,6 +6403,110 @@ segmentButtonText: {
     flex: 1,
     fontSize: Typography.body - 1,
     fontWeight: '700',
+  },
+  pdfSelectedRow: {
+    alignItems: 'center',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+    minHeight: 54,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+  },
+  pdfSelectedCopy: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  pdfSelectedTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  pdfSelectedName: {
+    fontSize: Typography.body - 1,
+    fontWeight: '800',
+  },
+  pdfSelectedMeta: {
+    fontSize: Typography.caption,
+    lineHeight: 16,
+  },
+  pdfRemoveButton: {
+    alignItems: 'center',
+    borderRadius: Radius.pill,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  pdfAnalysisStatus: {
+    alignItems: 'center',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    padding: Spacing.md,
+  },
+  pdfAnalysisStatusTitle: {
+    fontSize: Typography.body - 1,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  pdfRetryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    paddingVertical: 4,
+  },
+  pdfRetryButtonText: {
+    fontSize: Typography.caption + 1,
+    fontWeight: '800',
+  },
+  pdfAnalysisCard: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    gap: 10,
+    padding: Spacing.md,
+  },
+  pdfAnalysisHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  pdfAnalysisIcon: {
+    alignItems: 'center',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  pdfAnalysisTitle: {
+    fontSize: Typography.body - 1,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  pdfAnalysisSummary: {
+    fontSize: Typography.caption + 1,
+    lineHeight: 19,
+  },
+  topicChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  topicChip: {
+    alignItems: 'center',
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  topicChipText: {
+    fontSize: Typography.caption,
+    fontWeight: '800',
   },
   taskFormScroll: {
     maxHeight: 540,
