@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BackButton } from '@/components/auth/back-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -19,6 +20,40 @@ export default function FocusSessionScreen() {
 
   const timerRef = useRef<any>(null);
 
+  // Load saved stats
+  useEffect(() => {
+    const loadSavedStats = async () => {
+      try {
+        const raw = await AsyncStorage.getItem('@distrakill_focus_stats');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.sessionCount !== undefined) setSessionCount(parsed.sessionCount);
+          if (parsed.totalMinutes !== undefined) setFocusMinutes(parsed.totalMinutes);
+        }
+      } catch (e) {}
+    };
+    loadSavedStats();
+  }, []);
+
+  const recordCompletedSession = async (mins: number) => {
+    try {
+      const raw = await AsyncStorage.getItem('@distrakill_focus_stats');
+      const prev = raw ? JSON.parse(raw) : { totalMinutes: 0, sessionCount: 0 };
+      const newTotalMins = (prev.totalMinutes || 0) + mins;
+      const newSessions = (prev.sessionCount || 0) + 1;
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      const updated = {
+        totalMinutes: newTotalMins,
+        sessionCount: newSessions,
+        lastSessionDate: todayStr,
+      };
+      await AsyncStorage.setItem('@distrakill_focus_stats', JSON.stringify(updated));
+      setSessionCount(newSessions);
+      setFocusMinutes(newTotalMins);
+    } catch (e) {}
+  };
+
   useEffect(() => {
     if (isActive && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -26,10 +61,9 @@ export default function FocusSessionScreen() {
       }, 1000);
     } else if (timeLeft === 0 && isActive) {
       setIsActive(false);
-      setSessionCount((prev) => prev + 1);
-      setFocusMinutes((prev) => prev + duration);
+      recordCompletedSession(duration);
       setTimeLeft(duration * 60); // Reset timer
-      alert('Focus Session Completed! Take a short break.');
+      Alert.alert('Focus Session Completed! 🎉', 'Great job staying focused. Take a short break!');
     }
 
     return () => {
