@@ -9,7 +9,6 @@ import {
   Animated,
   Modal,
   Share,
-  Clipboard,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

@@ -22,12 +22,17 @@ import { db } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
+import { formatDateKey, getTodayKey } from '@/utils/planner-utils';
 
 type StudyTask = {
   id: string;
   title: string;
   completed: boolean;
   createdAt: number;
+  date?: string;
+  subject?: string;
+  priority?: 'low' | 'medium' | 'high';
+  estimatedMinutes?: number;
 };
 
 export default function HomeScreen() {
@@ -48,32 +53,43 @@ export default function HomeScreen() {
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [profileName, setProfileName] = useState(user?.name ?? 'Student');
 
+  const focusStatsKey = userId ? `@distrakill_focus_stats_${userId}` : '@distrakill_focus_stats';
+  const profileKey = userId ? `@distrakill_user_profile_${userId}` : '@distrakill_user_profile';
+
   // Load Focus Stats & Profile from AsyncStorage
-  const loadLocalData = async () => {
+  const loadLocalData = useCallback(async () => {
     try {
-      const focusData = await AsyncStorage.getItem('@distrakill_focus_stats');
+      let focusData = await AsyncStorage.getItem(focusStatsKey);
+      if (!focusData && userId) {
+        focusData = await AsyncStorage.getItem('@distrakill_focus_stats');
+      }
       if (focusData) {
         const parsed = JSON.parse(focusData);
         if (parsed.totalMinutes !== undefined) setFocusMinutes(parsed.totalMinutes);
         if (parsed.sessionCount !== undefined) setSessionCount(parsed.sessionCount);
       }
 
-      const profileData = await AsyncStorage.getItem('@distrakill_user_profile');
+      let profileData = await AsyncStorage.getItem(profileKey);
+      if (!profileData && userId) {
+        profileData = await AsyncStorage.getItem('@distrakill_user_profile');
+      }
       if (profileData) {
         const parsed = JSON.parse(profileData);
         if (parsed.avatarUri) setAvatarUri(parsed.avatarUri);
         if (parsed.name) setProfileName(parsed.name);
+      } else if (user?.name) {
+        setProfileName(user.name);
       }
-    } catch (e) {
-      console.log('Error loading home data:', e);
+    } catch {
+      // Ignore read errors
     }
-  };
+  }, [focusStatsKey, profileKey, user?.name, userId]);
 
   // Reload when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       loadLocalData();
-    }, [])
+    }, [loadLocalData])
   );
 
   // Listen to Firestore Tasks in Realtime
@@ -92,11 +108,25 @@ export default function HomeScreen() {
       (snapshot) => {
         const loadedTasks: StudyTask[] = snapshot.docs.map((d) => {
           const data = d.data();
+          const taskDate =
+            typeof data.date === 'string' && data.date
+              ? data.date
+              : typeof data.createdAt === 'number' && data.createdAt > 0
+              ? formatDateKey(new Date(data.createdAt))
+              : '';
+
           return {
             id: d.id,
             title: typeof data.title === 'string' ? data.title : 'Untitled task',
             completed: Boolean(data.completed),
             createdAt: typeof data.createdAt === 'number' ? data.createdAt : 0,
+            date: taskDate,
+            subject: typeof data.subject === 'string' ? data.subject : undefined,
+            priority: data.priority,
+            estimatedMinutes:
+              typeof data.estimatedMinutes === 'number'
+                ? data.estimatedMinutes
+                : undefined,
           };
         });
 
@@ -126,10 +156,12 @@ export default function HomeScreen() {
     }
   };
 
-  // Calculations
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((t) => t.completed).length;
-  const pendingTasks = tasks.filter((t) => !t.completed);
+  // Calculations: Synced strictly with Today's tasks
+  const todayKey = getTodayKey();
+  const todayTasks = tasks.filter((t) => t.date === todayKey);
+  const totalTasks = todayTasks.length;
+  const completedTasks = todayTasks.filter((t) => t.completed).length;
+  const pendingTasks = todayTasks.filter((t) => !t.completed);
   const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   // Format Focus Hours
@@ -211,8 +243,88 @@ export default function HomeScreen() {
         </Text>
       </View>
 
+      {/* 📝 Today's Tasks Section */}
+      <View style={styles.sectionHeaderRow}>
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>{"Today's Pending Tasks"}</Text>
+        <Pressable onPress={() => router.push('/(app)/(tabs)/study-planner' as any)}>
+          <Text style={[styles.seeAllText, { color: theme.primary }]}>Open Planner →</Text>
+        </Pressable>
+      </View>
+
+      {isLoadingTasks ? (
+        <View style={[styles.loadingBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <ActivityIndicator size="small" color={theme.primary} />
+        </View>
+      ) : pendingTasks.length === 0 ? (
+        <View style={[styles.emptyTaskCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Ionicons
+            name={totalTasks === 0 ? 'clipboard-outline' : 'checkmark-circle-outline'}
+            size={32}
+            color={totalTasks === 0 ? theme.textMuted : '#10B981'}
+          />
+          <Text style={[styles.emptyTitle, { color: theme.text }]}>
+            {totalTasks === 0 ? 'No tasks planned yet' : 'All caught up!'}
+          </Text>
+          <Text style={[styles.emptyDesc, { color: theme.textMuted }]}>
+            {totalTasks === 0
+              ? 'Add your assignments and study goals in the planner.'
+              : 'You completed all your study tasks for now.'}
+          </Text>
+          <Pressable
+            style={[styles.addTaskBtn, { backgroundColor: theme.primary }]}
+            onPress={() => router.push('/(app)/(tabs)/study-planner' as any)}
+          >
+            <Ionicons name="add" size={16} color={theme.buttonText} />
+            <Text style={[styles.addTaskBtnText, { color: theme.buttonText }]}>
+              {totalTasks === 0 ? 'Create First Task' : 'Add Another Task'}
+            </Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.tasksList}>
+          {pendingTasks.slice(0, 3).map((task) => (
+            <View
+              key={task.id}
+              style={[styles.taskItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+            >
+              <Pressable
+                onPress={() => handleToggleTask(task)}
+                style={styles.checkboxTouch}
+                hitSlop={8}
+              >
+                <Ionicons
+                  name={task.completed ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={task.completed ? theme.primary : theme.textMuted}
+                />
+              </Pressable>
+              <View style={styles.taskTextCol}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.taskItemTitle,
+                    {
+                      color: task.completed ? theme.textMuted : theme.text,
+                      textDecorationLine: task.completed ? 'line-through' : 'none',
+                    },
+                  ]}
+                >
+                  {task.title}
+                </Text>
+                {task.subject ? (
+                  <Text style={[styles.taskItemSub, { color: theme.textMuted }]}>
+                    {task.subject}
+                    {task.estimatedMinutes ? ` • ${task.estimatedMinutes}m` : ''}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* 🚀 Quick Access Tools */}
-      <Text style={[styles.sectionTitle, { color: theme.text }]}>
+      <Text style={[styles.sectionTitle, { color: theme.text, marginTop: Spacing.sm }]}>
         Quick Actions & Tools
       </Text>
 
@@ -437,10 +549,17 @@ const styles = StyleSheet.create({
   checkboxTouch: {
     padding: 2,
   },
-  taskItemTitle: {
+  taskTextCol: {
     flex: 1,
+    gap: 2,
+  },
+  taskItemTitle: {
     fontSize: Typography.body - 1,
     fontWeight: '600',
+  },
+  taskItemSub: {
+    fontSize: Typography.caption - 1,
+    fontWeight: '500',
   },
   gridContainer: {
     gap: Spacing.sm + 2,

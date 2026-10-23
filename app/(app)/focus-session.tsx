@@ -1,15 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BackButton } from '@/components/auth/back-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
+import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 
 export default function FocusSessionScreen() {
   const theme = useAuthTheme();
+  const { user } = useAuth();
+  const statsKey = user?.uid ? `@distrakill_focus_stats_${user.uid}` : '@distrakill_focus_stats';
 
   const [duration, setDuration] = useState(25); // in minutes
   const [timeLeft, setTimeLeft] = useState(25 * 60); // in seconds
@@ -19,25 +22,29 @@ export default function FocusSessionScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   const timerRef = useRef<any>(null);
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
 
   // Load saved stats
   useEffect(() => {
     const loadSavedStats = async () => {
       try {
-        const raw = await AsyncStorage.getItem('@distrakill_focus_stats');
+        const raw = await AsyncStorage.getItem(statsKey);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed.sessionCount !== undefined) setSessionCount(parsed.sessionCount);
           if (parsed.totalMinutes !== undefined) setFocusMinutes(parsed.totalMinutes);
         }
-      } catch (e) {}
+      } catch {
+        // Ignore read errors
+      }
     };
-    loadSavedStats();
-  }, []);
+    void loadSavedStats();
+  }, [statsKey]);
 
-  const recordCompletedSession = async (mins: number) => {
+  const recordCompletedSession = useCallback(async (mins: number) => {
     try {
-      const raw = await AsyncStorage.getItem('@distrakill_focus_stats');
+      const raw = await AsyncStorage.getItem(statsKey);
       const prev = raw ? JSON.parse(raw) : { totalMinutes: 0, sessionCount: 0 };
       const newTotalMins = (prev.totalMinutes || 0) + mins;
       const newSessions = (prev.sessionCount || 0) + 1;
@@ -48,30 +55,47 @@ export default function FocusSessionScreen() {
         sessionCount: newSessions,
         lastSessionDate: todayStr,
       };
-      await AsyncStorage.setItem('@distrakill_focus_stats', JSON.stringify(updated));
+      await AsyncStorage.setItem(statsKey, JSON.stringify(updated));
       setSessionCount(newSessions);
       setFocusMinutes(newTotalMins);
-    } catch (e) {}
-  };
+    } catch {
+      // Ignore write errors
+    }
+  }, [statsKey]);
 
   useEffect(() => {
-    if (isActive && timeLeft > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0 && isActive) {
-      setIsActive(false);
-      recordCompletedSession(duration);
-      setTimeLeft(duration * 60); // Reset timer
-      Alert.alert('Focus Session Completed! 🎉', 'Great job staying focused. Take a short break!');
+    if (!isActive) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
     }
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          setIsActive(false);
+          const finishedDuration = durationRef.current;
+          void recordCompletedSession(finishedDuration);
+          Alert.alert('Focus Session Completed! 🎉', 'Great job staying focused. Take a short break!');
+          return finishedDuration * 60;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
     };
-  }, [isActive, timeLeft, duration]);
+  }, [isActive, recordCompletedSession]);
 
   const toggleTimer = () => {
     setIsActive(!isActive);

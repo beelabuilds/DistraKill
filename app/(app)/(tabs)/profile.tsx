@@ -2,6 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+} from 'firebase/auth';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
@@ -16,6 +21,7 @@ import {
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
+import { auth } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
@@ -24,6 +30,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const theme = useAuthTheme();
   const { logout, user } = useAuth();
+  const userProfileKey = user?.uid ? `@distrakill_user_profile_${user.uid}` : '@distrakill_user_profile';
 
   // Settings Toggles
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -32,9 +39,9 @@ export default function ProfileScreen() {
 
   // Core Profile Info
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
-  const [name, setName] = useState(user?.name ?? 'Salsabil Ahmed');
-  const [username, setUsername] = useState('salsabil_focus');
-  const [email, setEmail] = useState(user?.email ?? 'salsabil@iut-dhaka.edu');
+  const [name, setName] = useState(user?.name || (user?.email ? user.email.split('@')[0] : 'Student'));
+  const [username, setUsername] = useState(user?.email ? user.email.split('@')[0] : 'student_focus');
+  const [email, setEmail] = useState(user?.email ?? '');
 
   // Edit Profile Form State
   const [isEditing, setIsEditing] = useState(false);
@@ -43,25 +50,31 @@ export default function ProfileScreen() {
   const [editEmail, setEditEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
   // Load saved profile data
   useEffect(() => {
     const loadProfileData = async () => {
       try {
-        const savedData = await AsyncStorage.getItem('@distrakill_user_profile');
+        let savedData = await AsyncStorage.getItem(userProfileKey);
+        if (!savedData && user?.uid) {
+          savedData = await AsyncStorage.getItem('@distrakill_user_profile');
+        }
         if (savedData) {
           const parsed = JSON.parse(savedData);
           if (parsed.avatarUri) setAvatarUri(parsed.avatarUri);
           if (parsed.name) setName(parsed.name);
           if (parsed.username) setUsername(parsed.username);
-          if (parsed.email) setEmail(parsed.email);
+        }
+        if (user?.email) {
+          setEmail(user.email);
         }
       } catch (err) {
         console.log('Error loading saved profile:', err);
       }
     };
     loadProfileData();
-  }, []);
+  }, [user?.email, user?.uid, userProfileKey]);
 
   const handleOpenEditModal = () => {
     setEditName(name);
@@ -117,11 +130,11 @@ export default function ProfileScreen() {
 
   const saveAvatarUriToStorage = async (uri: string | null) => {
     try {
-      const savedData = await AsyncStorage.getItem('@distrakill_user_profile');
+      const savedData = await AsyncStorage.getItem(userProfileKey);
       const current = savedData ? JSON.parse(savedData) : {};
-      await AsyncStorage.setItem('@distrakill_user_profile', JSON.stringify({ ...current, avatarUri: uri }));
-    } catch (e) {
-      console.log('Error saving avatar:', e);
+      await AsyncStorage.setItem(userProfileKey, JSON.stringify({ ...current, avatarUri: uri }));
+    } catch (_e) {
+      console.log('Error saving avatar:', _e);
     }
   };
 
@@ -165,11 +178,58 @@ export default function ProfileScreen() {
         username: cleanUsername,
         email: cleanEmail,
       };
-      await AsyncStorage.setItem('@distrakill_user_profile', JSON.stringify(profileToSave));
+      await AsyncStorage.setItem(userProfileKey, JSON.stringify(profileToSave));
       Alert.alert('Success', 'Profile updated successfully!');
       setIsEditing(false);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to save profile changes.');
+    }
+  };
+
+  const handleUpdatePassword = async () => {
+    if (!newPassword.trim()) {
+      setIsSecurityOpen(false);
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      Alert.alert('Validation Error', 'New password must be at least 8 characters.');
+      return;
+    }
+
+    if (!auth.currentUser) {
+      Alert.alert('Error', 'No authenticated user found.');
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      if (currentPassword && auth.currentUser.email) {
+        const credential = EmailAuthProvider.credential(
+          auth.currentUser.email,
+          currentPassword
+        );
+        await reauthenticateWithCredential(auth.currentUser, credential);
+      }
+
+      await updatePassword(auth.currentUser, newPassword);
+      Alert.alert('Success', 'Password updated successfully!');
+      setCurrentPassword('');
+      setNewPassword('');
+      setIsSecurityOpen(false);
+    } catch (err: any) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        Alert.alert('Authentication Failed', 'Your current password is incorrect.');
+      } else if (err.code === 'auth/requires-recent-login') {
+        Alert.alert(
+          'Re-authentication Required',
+          'For security, please log out and log back in before changing your password.'
+        );
+      } else {
+        Alert.alert('Error', err.message || 'Failed to update password.');
+      }
+    } finally {
+      setIsUpdatingPassword(false);
     }
   };
 
@@ -431,19 +491,17 @@ export default function ProfileScreen() {
             </View>
 
             <Pressable
-              onPress={() => {
-                if (newPassword) {
-                  Alert.alert('Success', 'Password updated successfully!');
-                }
-                setIsSecurityOpen(false);
-              }}
+              disabled={isUpdatingPassword}
+              onPress={handleUpdatePassword}
               style={({ pressed }) => [
                 styles.doneBtn,
                 { backgroundColor: theme.primary },
-                pressed && styles.pressed,
+                (pressed || isUpdatingPassword) && styles.pressed,
               ]}
             >
-              <Text style={[styles.doneBtnText, { color: theme.buttonText }]}>Done</Text>
+              <Text style={[styles.doneBtnText, { color: theme.buttonText }]}>
+                {isUpdatingPassword ? 'Updating...' : 'Done'}
+              </Text>
             </Pressable>
           </View>
         </View>
