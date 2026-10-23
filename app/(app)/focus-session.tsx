@@ -4,6 +4,9 @@ import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
+  type AppStateStatus,
+  BackHandler,
   Modal,
   Platform,
   Pressable,
@@ -14,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import { Circle, Svg } from 'react-native-svg';
+import { useNavigation } from 'expo-router';
 
 import { BackButton } from '@/components/auth/back-button';
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -65,6 +69,7 @@ export default function FocusSessionScreen() {
   const profileKey = userId ? `@distrakill_user_profile_${userId}` : '@distrakill_user_profile';
 
   // --- Session State ---
+  const navigation = useNavigation();
   const [sessionMode, setSessionMode] = useState<SessionMode>('focus');
   const [focusDuration, setFocusDuration] = useState(25); // minutes
   const [shortBreakDuration, setShortBreakDuration] = useState(5);
@@ -72,6 +77,7 @@ export default function FocusSessionScreen() {
   const [timeLeft, setTimeLeft] = useState(25 * 60); // seconds
   const [isActive, setIsActive] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [distractionBreaches, setDistractionBreaches] = useState(0);
 
   // --- Real Stats & Daily Goal ---
   const [sessionCount, setSessionCount] = useState(0);
@@ -103,6 +109,99 @@ export default function FocusSessionScreen() {
     if (sessionMode === 'short_break') return shortBreakDuration;
     return longBreakDuration;
   }, [sessionMode, focusDuration, shortBreakDuration, longBreakDuration]);
+
+  // 🔒 1. Screen Navigation Locker (Prevents back gesture, tab clicks, router changes)
+  useEffect(() => {
+    if (!isActive) return;
+
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      // Prevent navigation away from the timer
+      e.preventDefault();
+
+      Alert.alert(
+        'App Locked 🔒',
+        'DistraKill is locked in Focus Mode to eliminate distractions. You cannot leave the app or toggle between features until the countdown reaches 00:00!',
+        [
+          { text: 'Stay Focused', style: 'default' },
+          {
+            text: 'Emergency Give Up',
+            style: 'destructive',
+            onPress: () => {
+              setIsActive(false);
+              setTimeLeft(currentDuration * 60);
+              navigation.dispatch(e.data.action);
+            },
+          },
+        ]
+      );
+    });
+
+    return unsubscribe;
+  }, [isActive, navigation, currentDuration]);
+
+  // 🔒 2. Android Hardware Back Button Locker
+  useEffect(() => {
+    if (!isActive) return;
+
+    const onBackPress = () => {
+      Alert.alert(
+        'App Locked 🔒',
+        'DistraKill Focus Locker is active. All navigation is frozen until the countdown completes!'
+      );
+      return true; // Blocks hardware back
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [isActive]);
+
+  // 🔒 3. App State & Background Switch Detection Locker (iOS / Android)
+  useEffect(() => {
+    if (!isActive) return;
+
+    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        setDistractionBreaches((prev) => prev + 1);
+      } else if (nextState === 'active') {
+        Alert.alert(
+          '⚠️ Focus Breach Detected!',
+          'You left or minimized DistraKill during your focus countdown. Stay in the app to protect your study streak!'
+        );
+      }
+    });
+
+    return () => sub.remove();
+  }, [isActive]);
+
+  // 🔒 4. Web Visibility Change & Unload Locker
+  useEffect(() => {
+    if (!isActive || Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        setDistractionBreaches((prev) => prev + 1);
+      } else {
+        Alert.alert(
+          '⚠️ Tab Switch Detected!',
+          'You navigated away from DistraKill. Keep this tab in focus!'
+        );
+      }
+    };
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'Focus countdown is active!';
+      return 'Focus countdown is active!';
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isActive]);
 
   // Active theme color depending on mode
   const modeColor = useMemo(() => {
@@ -209,6 +308,29 @@ export default function FocusSessionScreen() {
     [statsKey]
   );
 
+  // --- Mode Switching Helper ---
+  const handleSwitchMode = useCallback(
+    (modeVal: SessionMode, defaultMins?: number) => {
+      triggerTapHaptic();
+      setIsActive(false);
+      setSessionMode(modeVal);
+
+      let targetMins = defaultMins;
+      if (!targetMins) {
+        if (modeVal === 'focus') targetMins = focusDuration;
+        else if (modeVal === 'short_break') targetMins = shortBreakDuration;
+        else targetMins = longBreakDuration;
+      }
+
+      if (modeVal === 'focus') setFocusDuration(targetMins);
+      else if (modeVal === 'short_break') setShortBreakDuration(targetMins);
+      else setLongBreakDuration(targetMins);
+
+      setTimeLeft(targetMins * 60);
+    },
+    [triggerTapHaptic, focusDuration, shortBreakDuration, longBreakDuration]
+  );
+
   // --- 3. Timer Engine ---
   useEffect(() => {
     if (!isActive) {
@@ -236,8 +358,8 @@ export default function FocusSessionScreen() {
           if (currentMode === 'focus') {
             void recordCompletedSession(finishedMins);
             Alert.alert(
-              'Focus Session Completed! 🎉',
-              `Outstanding work! You finished ${finishedMins} minutes of uninterrupted study. Take a well-deserved break!`,
+              '🎉 Session Complete • App Unlocked!',
+              `Outstanding work! You completed ${finishedMins} minutes of locked deep focus. DistraKill features have now unfrozen! Take a short break!`,
               [
                 {
                   text: 'Take 5m Break',
@@ -248,8 +370,8 @@ export default function FocusSessionScreen() {
             );
           } else {
             Alert.alert(
-              'Break Finished ⚡',
-              'Feeling refreshed? Jump right back into your deep work session!',
+              'Break Finished • App Unlocked ⚡',
+              'Your break is complete! Ready to start your next locked deep focus session?',
               [
                 {
                   text: 'Start Focus',
@@ -272,27 +394,7 @@ export default function FocusSessionScreen() {
         timerRef.current = null;
       }
     };
-  }, [isActive, recordCompletedSession, triggerSessionChime]);
-
-  // --- Mode Switching Helper ---
-  const handleSwitchMode = (modeVal: SessionMode, defaultMins?: number) => {
-    triggerTapHaptic();
-    setIsActive(false);
-    setSessionMode(modeVal);
-
-    let targetMins = defaultMins;
-    if (!targetMins) {
-      if (modeVal === 'focus') targetMins = focusDuration;
-      else if (modeVal === 'short_break') targetMins = shortBreakDuration;
-      else targetMins = longBreakDuration;
-    }
-
-    if (modeVal === 'focus') setFocusDuration(targetMins);
-    else if (modeVal === 'short_break') setShortBreakDuration(targetMins);
-    else setLongBreakDuration(targetMins);
-
-    setTimeLeft(targetMins * 60);
-  };
+  }, [handleSwitchMode, isActive, recordCompletedSession, triggerSessionChime]);
 
   // --- Controls ---
   const toggleTimer = () => {
@@ -303,17 +405,21 @@ export default function FocusSessionScreen() {
   const resetTimer = () => {
     triggerTapHaptic();
     if (isActive) {
-      Alert.alert('Reset Timer?', 'Are you sure you want to restart the current interval?', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset',
-          style: 'destructive',
-          onPress: () => {
-            setIsActive(false);
-            setTimeLeft(currentDuration * 60);
+      Alert.alert(
+        'Abandon Locked Session?',
+        'DistraKill is currently locked in Focus Mode. Abandoning now will cancel the timer and unfreeze the app, but no focus streak time will be logged.',
+        [
+          { text: 'Keep Focusing', style: 'cancel' },
+          {
+            text: 'Emergency Unlock & Exit',
+            style: 'destructive',
+            onPress: () => {
+              setIsActive(false);
+              setTimeLeft(currentDuration * 60);
+            },
           },
-        },
-      ]);
+        ]
+      );
     } else {
       setTimeLeft(currentDuration * 60);
     }
@@ -323,12 +429,12 @@ export default function FocusSessionScreen() {
     triggerTapHaptic();
     if (sessionMode === 'focus') {
       Alert.alert(
-        'Finish Session Early?',
-        'Mark this session as completed now and log your focus time?',
+        'Finish & Unlock Early?',
+        'Complete this locked session now and log your elapsed focus time?',
         [
           { text: 'Keep Going', style: 'cancel' },
           {
-            text: 'Finish & Log',
+            text: 'Log & Unlock',
             onPress: () => {
               setIsActive(false);
               const elapsedSecs = currentDuration * 60 - timeLeft;
@@ -414,21 +520,33 @@ export default function FocusSessionScreen() {
     <ScreenContainer scrollable>
       {/* Top Header Row with Navigation & Sound Toggle */}
       <View style={styles.topBar}>
-        <BackButton fallbackHref="/home" />
+        {isActive ? (
+          <View style={styles.lockedHeaderPill}>
+            <Ionicons name="lock-closed" size={13} color="#FFFFFF" />
+            <Text style={styles.lockedHeaderPillText}>LOCKED</Text>
+          </View>
+        ) : (
+          <BackButton fallbackHref="/home" />
+        )}
 
         <View style={styles.headerTitleWrap}>
           <Text style={[styles.screenHeaderTitle, { color: theme.text }]}>
-            Focus Studio
+            {isActive ? 'DistraKill Locker' : 'Focus Studio'}
           </Text>
           <View style={styles.studioStatusRow}>
             <View
               style={[
                 styles.liveStatusDot,
-                { backgroundColor: isActive ? '#10B981' : theme.textMuted },
+                { backgroundColor: isActive ? '#EF4444' : '#10B981' },
               ]}
             />
-            <Text style={[styles.screenHeaderSub, { color: theme.textMuted }]}>
-              {isActive ? 'Session Active' : 'Ready'}
+            <Text
+              style={[
+                styles.screenHeaderSub,
+                { color: isActive ? '#EF4444' : theme.textMuted },
+              ]}
+            >
+              {isActive ? 'App Frozen' : 'Ready'}
             </Text>
           </View>
         </View>
@@ -461,7 +579,9 @@ export default function FocusSessionScreen() {
         style={[
           styles.segmentedContainer,
           { backgroundColor: theme.surfaceSoft, borderColor: theme.border },
+          isActive && styles.segmentedLocked,
         ]}
+        pointerEvents={isActive ? 'none' : 'auto'}
       >
         <Pressable
           onPress={() => handleSwitchMode('focus')}
@@ -608,99 +728,150 @@ export default function FocusSessionScreen() {
 
             <Text style={[styles.timerSubText, { color: theme.textMuted }]}>
               {isActive
-                ? `${Math.ceil(timeLeft / 60)}m remaining`
+                ? `Locked • ${Math.ceil(timeLeft / 60)}m left`
                 : 'Tap play to begin'}
             </Text>
           </View>
         </View>
       </View>
 
-      {/* ⏱️ Professional Duration Presets & Custom Picker */}
-      <View style={styles.presetsSection}>
-        <View style={styles.presetsHeaderRow}>
-          <Text style={[styles.presetsSectionLabel, { color: theme.textMuted }]}>
-            {sessionMode === 'focus' ? 'Focus Intervals' : 'Break Length'}
-          </Text>
-
-          <Pressable
-            hitSlop={8}
-            onPress={handleOpenCustomModal}
-            style={({ pressed }) => [
-              styles.customTimeHeaderBtn,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Ionicons name="options-outline" size={14} color={theme.primary} />
-            <Text style={[styles.customTimeHeaderText, { color: theme.primary }]}>
-              Custom Time
-            </Text>
-          </Pressable>
-        </View>
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.presetsScroll}
+      {/* ⏱️ Duration Presets when Idle vs App Locker HUD when Active */}
+      {isActive ? (
+        <View
+          style={[
+            styles.lockdownCard,
+            {
+              backgroundColor: theme.surface,
+              borderColor: '#EF444460',
+            },
+          ]}
         >
-          {currentPresets.map((preset) => {
-            const isSelected = currentDuration === preset.mins;
-            return (
-              <Pressable
-                key={preset.mins}
-                onPress={() => handleSelectPresetDuration(preset.mins)}
-                style={({ pressed }) => [
-                  styles.presetCard,
-                  {
-                    backgroundColor: isSelected ? modeColor : theme.surface,
-                    borderColor: isSelected ? modeColor : theme.border,
-                  },
-                  pressed && styles.pressed,
-                ]}
-              >
-                <View style={styles.presetCardTopRow}>
-                  <Ionicons
-                    name={preset.icon}
-                    size={16}
-                    color={isSelected ? '#FFFFFF' : modeColor}
-                  />
+          <View style={styles.lockdownCardTop}>
+            <View style={styles.lockShieldCircle}>
+              <Ionicons name="shield-checkmark" size={24} color="#EF4444" />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <View style={styles.lockBadgeRow}>
+                <View style={styles.lockStatusDot} />
+                <Text style={styles.lockBadgeText}>APP LOCKER ENGAGED</Text>
+              </View>
+              <Text style={[styles.lockdownTitle, { color: theme.text }]}>
+                Features &amp; Navigation Frozen
+              </Text>
+              <Text style={[styles.lockdownSub, { color: theme.textMuted }]}>
+                DistraKill is locked on this timer. All app features will unfreeze automatically when the countdown reaches 00:00.
+              </Text>
+            </View>
+          </View>
+
+          {distractionBreaches > 0 ? (
+            <View style={styles.breachAlertRow}>
+              <Ionicons name="alert-circle" size={15} color="#EF4444" />
+              <Text style={styles.breachAlertText}>
+                {distractionBreaches} app switch breach{distractionBreaches > 1 ? 'es' : ''} detected! Stay on this screen.
+              </Text>
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.focusCommitmentPill,
+                { backgroundColor: theme.surfaceSoft },
+              ]}
+            >
+              <Ionicons name="sparkles" size={13} color="#10B981" />
+              <Text style={[styles.focusCommitmentText, { color: theme.textMuted }]}>
+                Zero distractions detected • Keep going!
+              </Text>
+            </View>
+          )}
+        </View>
+      ) : (
+        <View style={styles.presetsSection}>
+          <View style={styles.presetsHeaderRow}>
+            <Text style={[styles.presetsSectionLabel, { color: theme.textMuted }]}>
+              {sessionMode === 'focus' ? 'Focus Intervals' : 'Break Length'}
+            </Text>
+
+            <Pressable
+              hitSlop={8}
+              onPress={handleOpenCustomModal}
+              style={({ pressed }) => [
+                styles.customTimeHeaderBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons name="options-outline" size={14} color={theme.primary} />
+              <Text style={[styles.customTimeHeaderText, { color: theme.primary }]}>
+                Custom Time
+              </Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.presetsScroll}
+          >
+            {currentPresets.map((preset) => {
+              const isSelected = currentDuration === preset.mins;
+              return (
+                <Pressable
+                  key={preset.mins}
+                  onPress={() => handleSelectPresetDuration(preset.mins)}
+                  style={({ pressed }) => [
+                    styles.presetCard,
+                    {
+                      backgroundColor: isSelected ? modeColor : theme.surface,
+                      borderColor: isSelected ? modeColor : theme.border,
+                    },
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.presetCardTopRow}>
+                    <Ionicons
+                      name={preset.icon}
+                      size={16}
+                      color={isSelected ? '#FFFFFF' : modeColor}
+                    />
+                    <Text
+                      style={[
+                        styles.presetCardMinutes,
+                        { color: isSelected ? '#FFFFFF' : theme.text },
+                      ]}
+                    >
+                      {preset.mins}m
+                    </Text>
+                  </View>
+
                   <Text
                     style={[
-                      styles.presetCardMinutes,
+                      styles.presetCardLabel,
                       { color: isSelected ? '#FFFFFF' : theme.text },
                     ]}
                   >
-                    {preset.mins}m
+                    {preset.label}
                   </Text>
-                </View>
 
-                <Text
-                  style={[
-                    styles.presetCardLabel,
-                    { color: isSelected ? '#FFFFFF' : theme.text },
-                  ]}
-                >
-                  {preset.label}
-                </Text>
-
-                <Text
-                  style={[
-                    styles.presetCardSub,
-                    {
-                      color: isSelected ? 'rgba(255, 255, 255, 0.85)' : theme.textMuted,
-                    },
-                  ]}
-                >
-                  {preset.sub}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
+                  <Text
+                    style={[
+                      styles.presetCardSub,
+                      {
+                        color: isSelected ? 'rgba(255, 255, 255, 0.85)' : theme.textMuted,
+                      },
+                    ]}
+                  >
+                    {preset.sub}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
       {/* 🎮 Primary Interactive Controls */}
       <View style={styles.controlsRow}>
-        {/* Reset / Restart */}
+        {/* Reset / Abandon */}
         <Pressable
           onPress={resetTimer}
           style={({ pressed }) => [
@@ -709,7 +880,11 @@ export default function FocusSessionScreen() {
             pressed && styles.pressed,
           ]}
         >
-          <Ionicons name="refresh-outline" size={22} color={theme.text} />
+          <Ionicons
+            name={isActive ? 'close-outline' : 'refresh-outline'}
+            size={22}
+            color={isActive ? '#EF4444' : theme.text}
+          />
         </Pressable>
 
         {/* Big Play / Pause Button */}
@@ -1033,6 +1208,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  lockedHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    gap: 4,
+  },
+  lockedHeaderPillText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
   segmentedContainer: {
     flexDirection: 'row',
     borderRadius: Radius.pill,
@@ -1040,6 +1230,9 @@ const styles = StyleSheet.create({
     padding: 3,
     marginBottom: Spacing.lg,
     gap: 3,
+  },
+  segmentedLocked: {
+    opacity: 0.45,
   },
   segmentItem: {
     flex: 1,
@@ -1099,6 +1292,80 @@ const styles = StyleSheet.create({
   },
   timerSubText: {
     fontSize: Typography.caption,
+    fontWeight: '600',
+  },
+  lockdownCard: {
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  lockdownCardTop: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  lockShieldCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EF444415',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  lockStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#EF4444',
+  },
+  lockBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#EF4444',
+    letterSpacing: 0.8,
+  },
+  lockdownTitle: {
+    fontSize: Typography.body,
+    fontWeight: '800',
+  },
+  lockdownSub: {
+    fontSize: Typography.caption,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  breachAlertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: Radius.sm,
+  },
+  breachAlertText: {
+    color: '#B91C1C',
+    fontSize: Typography.caption - 1,
+    fontWeight: '700',
+    flex: 1,
+  },
+  focusCommitmentPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+  },
+  focusCommitmentText: {
+    fontSize: Typography.caption - 1,
     fontWeight: '600',
   },
   presetsSection: {
