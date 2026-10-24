@@ -10,7 +10,7 @@ import { ScreenContainer } from "@/components/auth/screen-container";
 import { Radius, Spacing, Typography } from "@/constants/auth-theme";
 import { useAuth } from "@/contexts/auth-context";
 import { useAuthTheme } from "@/hooks/use-auth-theme";
-import { isValidEmail } from "@/utils/auth-validation";
+import { getAuthErrorMessage, isValidEmail } from "@/utils/auth-validation";
 
 type LoginErrors = {
   email?: string;
@@ -56,12 +56,8 @@ export default function LoginScreen() {
       await login(email.trim(), password);
       router.replace("/home");
     } catch (error: any) {
-      console.log("Firebase Login Error:", error);
-      console.log("Code:", error.code);
-      console.log("Message:", error.message);
-
       setErrors({
-        form: `${error.code}: ${error.message}`,
+        form: getAuthErrorMessage(error, "Incorrect email or password. Please try again."),
       });
     } finally {
       setLoading(false);
