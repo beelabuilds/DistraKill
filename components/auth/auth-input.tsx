@@ -23,7 +23,7 @@ export const AuthInput = forwardRef<TextInput, AuthInputProps>(
       <View style={styles.container}>
         <Text style={[styles.label, { color: theme.text }]}>{label}</Text>
         <TextInput
-          ref={ref}
+          ref={ref as any}
           placeholderTextColor={theme.textMuted}
           style={[
             styles.input,

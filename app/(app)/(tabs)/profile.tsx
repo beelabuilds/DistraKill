@@ -36,6 +36,7 @@ import { auth, db } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAppTheme } from '@/contexts/theme-context';
+import { getSelectedRingtoneId, RINGTONE_LIST } from '@/utils/audio-manager';
 import { getTodayKey } from '@/utils/planner-utils';
 
 const GOAL_OPTIONS = [1, 2, 3, 4, 5]; // hours
@@ -81,6 +82,7 @@ export default function ProfileScreen() {
   // --- Preferences State ---
   const [studyReminders, setStudyReminders] = useState(true);
   const [soundEffects, setSoundEffects] = useState(true);
+  const [ringtoneName, setRingtoneName] = useState('Marimba Melody');
 
   // --- Edit Profile Modal State ---
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -146,6 +148,11 @@ export default function ProfileScreen() {
         if (typeof parsedSettings.soundEffects === 'boolean')
           setSoundEffects(parsedSettings.soundEffects);
       }
+
+      // Load active focus ringtone
+      const rId = await getSelectedRingtoneId();
+      const rItem = RINGTONE_LIST.find((r) => r.id === rId);
+      if (rItem) setRingtoneName(rItem.name);
     } catch (err) {
       console.warn('Error reading local profile data:', err);
     }
@@ -460,7 +467,7 @@ export default function ProfileScreen() {
       : 0;
 
   return (
-    <ScreenContainer scrollable>
+    <ScreenContainer scrollable contentStyle={{ paddingBottom: 110 }}>
       {/* 👤 Profile Hero Card */}
       <View
         style={[
@@ -760,6 +767,37 @@ export default function ProfileScreen() {
             trackColor={{ false: theme.border, true: theme.primary }}
           />
         </View>
+
+        {/* Focus Ringtone */}
+        <View style={[styles.divider, { backgroundColor: theme.border }]} />
+        <Pressable
+          onPress={() => router.push('/(app)/focus-session' as any)}
+          style={({ pressed }) => [
+            styles.settingRow,
+            pressed && { opacity: 0.8 },
+          ]}
+        >
+          <View style={styles.settingIconBg}>
+            <Ionicons
+              name="musical-notes-outline"
+              size={18}
+              color={theme.primary}
+            />
+          </View>
+          <View style={styles.settingTextCol}>
+            <Text style={[styles.settingTitle, { color: theme.text }]}>
+              Focus Ringtone
+            </Text>
+            <Text style={[styles.settingSub, { color: theme.textMuted }]}>
+              {ringtoneName} • 5–7s Chime
+            </Text>
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color={theme.textMuted}
+          />
+        </Pressable>
       </View>
 
       {/* 🔐 Account Actions Card */}
@@ -1647,7 +1685,8 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    marginBottom: Spacing.xl,
+    marginTop: Spacing.xs,
+    marginBottom: Spacing.md,
   },
   signOutText: {
     color: '#EF4444',

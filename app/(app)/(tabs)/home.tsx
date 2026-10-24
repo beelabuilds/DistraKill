@@ -130,8 +130,16 @@ export default function HomeScreen() {
           };
         });
 
-        loadedTasks.sort((a, b) => b.createdAt - a.createdAt);
-        setTasks(loadedTasks);
+        const seen = new Set<string>();
+        const uniqueTasks: StudyTask[] = [];
+        for (const t of loadedTasks) {
+          if (t?.id && !seen.has(t.id)) {
+            seen.add(t.id);
+            uniqueTasks.push(t);
+          }
+        }
+        uniqueTasks.sort((a, b) => b.createdAt - a.createdAt);
+        setTasks(uniqueTasks);
         setIsLoadingTasks(false);
       },
       (error) => {
@@ -172,7 +180,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <ScreenContainer scrollable>
+    <ScreenContainer scrollable contentStyle={{ paddingBottom: 85 }}>
       {/* 👤 Dynamic Header Row */}
       <View style={styles.headerRow}>
         <Pressable onPress={() => router.push('/(app)/(tabs)/profile' as any)}>
@@ -282,9 +290,9 @@ export default function HomeScreen() {
         </View>
       ) : (
         <View style={styles.tasksList}>
-          {pendingTasks.slice(0, 3).map((task) => (
+          {pendingTasks.slice(0, 3).map((task, index) => (
             <View
-              key={task.id}
+              key={`${task.id}-${index}`}
               style={[styles.taskItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
             >
               <Pressable

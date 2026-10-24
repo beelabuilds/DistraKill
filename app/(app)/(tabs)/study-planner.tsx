@@ -39,6 +39,18 @@ import {
   getTodayKey,
 } from '@/utils/planner-utils';
 
+function deduplicateTasks(taskList: PlannerTask[]): PlannerTask[] {
+  const seen = new Set<string>();
+  const result: PlannerTask[] = [];
+  for (const t of taskList) {
+    if (t?.id && !seen.has(t.id)) {
+      seen.add(t.id);
+      result.push(t);
+    }
+  }
+  return result;
+}
+
 export default function StudyPlannerScreen() {
   const theme = useAuthTheme();
   const router = useRouter();
@@ -81,7 +93,7 @@ export default function StudyPlannerScreen() {
           try {
             const parsedTasks = JSON.parse(cachedTasksRaw);
             if (Array.isArray(parsedTasks)) {
-              setTasks(parsedTasks);
+              setTasks(deduplicateTasks(parsedTasks));
             }
           } catch (err) {
             console.error('Error parsing cached tasks:', err);
@@ -128,14 +140,14 @@ export default function StudyPlannerScreen() {
               typeof data.date === 'string' && data.date
                 ? data.date
                 : typeof data.createdAt === 'number' && data.createdAt > 0
-                ? formatDateKey(new Date(data.createdAt))
-                : '',
+                  ? formatDateKey(new Date(data.createdAt))
+                  : '',
             subject:
               typeof data.subject === 'string' ? data.subject : 'General',
             priority:
               data.priority === 'low' ||
-              data.priority === 'high' ||
-              data.priority === 'medium'
+                data.priority === 'high' ||
+                data.priority === 'medium'
                 ? data.priority
                 : 'medium',
             estimatedMinutes:
@@ -145,28 +157,29 @@ export default function StudyPlannerScreen() {
             pdfAttachment:
               data.pdfAttachment && typeof data.pdfAttachment === 'object'
                 ? {
-                    name: String(data.pdfAttachment.name || 'Document.pdf'),
-                    uri: String(data.pdfAttachment.uri || ''),
-                    size:
-                      typeof data.pdfAttachment.size === 'number'
-                        ? data.pdfAttachment.size
-                        : undefined,
-                    base64Uri:
-                      typeof data.pdfAttachment.base64Uri === 'string'
-                        ? data.pdfAttachment.base64Uri
-                        : undefined,
-                  }
+                  name: String(data.pdfAttachment.name || 'Document.pdf'),
+                  uri: String(data.pdfAttachment.uri || ''),
+                  size:
+                    typeof data.pdfAttachment.size === 'number'
+                      ? data.pdfAttachment.size
+                      : undefined,
+                  base64Uri:
+                    typeof data.pdfAttachment.base64Uri === 'string'
+                      ? data.pdfAttachment.base64Uri
+                      : undefined,
+                }
                 : null,
           };
         });
 
-        setTasks(loadedTasks);
+        const uniqueLoaded = deduplicateTasks(loadedTasks);
+        setTasks(uniqueLoaded);
         setIsLoadingTasks(false);
 
         // Update local cache
         void AsyncStorage.setItem(
           tasksCacheKey,
-          JSON.stringify(loadedTasks)
+          JSON.stringify(uniqueLoaded)
         ).catch((err) => {
           console.error('Failed caching tasks to AsyncStorage:', err);
         });
@@ -267,11 +280,11 @@ export default function StudyPlannerScreen() {
 
       const sanitizedPdf = quickPdf
         ? {
-            name: quickPdf.name,
-            uri: quickPdf.uri,
-            size: quickPdf.size ?? 0,
-            base64Uri: quickPdf.base64Uri || null,
-          }
+          name: quickPdf.name,
+          uri: quickPdf.uri,
+          size: quickPdf.size ?? 0,
+          base64Uri: quickPdf.base64Uri || null,
+        }
         : null;
 
       const newTaskPayload: Record<string, any> = {
@@ -306,7 +319,7 @@ export default function StudyPlannerScreen() {
         pdfAttachment: quickPdf,
       };
 
-      setTasks((prev) => [createdTask, ...prev]);
+      setTasks((prev) => deduplicateTasks([createdTask, ...prev]));
       setQuickTitle('');
       setQuickPdf(null);
     } catch (err) {
@@ -338,11 +351,11 @@ export default function StudyPlannerScreen() {
 
         const sanitizedPdf = taskData.pdfAttachment
           ? {
-              name: taskData.pdfAttachment.name,
-              uri: taskData.pdfAttachment.uri,
-              size: taskData.pdfAttachment.size ?? 0,
-              base64Uri: taskData.pdfAttachment.base64Uri || null,
-            }
+            name: taskData.pdfAttachment.name,
+            uri: taskData.pdfAttachment.uri,
+            size: taskData.pdfAttachment.size ?? 0,
+            base64Uri: taskData.pdfAttachment.base64Uri || null,
+          }
           : null;
 
         if (taskData.id) {
@@ -367,14 +380,14 @@ export default function StudyPlannerScreen() {
             prev.map((t) =>
               t.id === taskData.id
                 ? {
-                    ...t,
-                    title: taskData.title,
-                    subject: taskData.subject,
-                    priority: taskData.priority,
-                    estimatedMinutes: taskData.estimatedMinutes,
-                    date: taskData.date,
-                    pdfAttachment: taskData.pdfAttachment,
-                  }
+                  ...t,
+                  title: taskData.title,
+                  subject: taskData.subject,
+                  priority: taskData.priority,
+                  estimatedMinutes: taskData.estimatedMinutes,
+                  date: taskData.date,
+                  pdfAttachment: taskData.pdfAttachment,
+                }
                 : t
             )
           );
@@ -410,7 +423,7 @@ export default function StudyPlannerScreen() {
             pdfAttachment: taskData.pdfAttachment,
           };
 
-          setTasks((prev) => [createdTask, ...prev]);
+          setTasks((prev) => deduplicateTasks([createdTask, ...prev]));
         }
       } catch (err) {
         console.error('Failed to save detailed task:', err);
@@ -460,7 +473,7 @@ export default function StudyPlannerScreen() {
   );
 
   return (
-    <ScreenContainer scrollable>
+    <ScreenContainer scrollable contentStyle={{ paddingBottom: 85 }}>
       {/* Sleek Minimal Header */}
       <View style={styles.topHeader}>
         <View>
@@ -728,14 +741,14 @@ export default function StudyPlannerScreen() {
               {activeFilter === 'pdf'
                 ? 'No tasks with PDFs for this day'
                 : activeFilter === 'completed'
-                ? 'No completed tasks yet'
-                : 'No tasks scheduled for this day'}
+                  ? 'No completed tasks yet'
+                  : 'No tasks scheduled for this day'}
             </Text>
           </View>
         ) : (
-          filteredTasks.map((task) => (
+          filteredTasks.map((task, index) => (
             <TaskItem
-              key={task.id}
+              key={`${task.id}-${index}`}
               task={task}
               onToggle={handleToggleTask}
               onDelete={handleDeleteTask}

@@ -24,6 +24,14 @@ import { ScreenContainer } from '@/components/auth/screen-container';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAppTheme } from '@/contexts/theme-context';
+import {
+  RINGTONE_LIST,
+  DEFAULT_RINGTONE_ID,
+  getSelectedRingtoneId,
+  saveSelectedRingtoneId,
+  playRingtone,
+  stopRingtone,
+} from '@/utils/audio-manager';
 
 type SessionMode = 'focus' | 'short_break' | 'long_break';
 
@@ -79,6 +87,11 @@ export default function FocusSessionScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [distractionBreaches, setDistractionBreaches] = useState(0);
 
+  // --- Ringtone State ---
+  const [selectedRingtoneId, setSelectedRingtoneId] = useState(DEFAULT_RINGTONE_ID);
+  const [isRingtoneModalOpen, setIsRingtoneModalOpen] = useState(false);
+  const [previewingRingtoneId, setPreviewingRingtoneId] = useState<string | null>(null);
+
   // --- Real Stats & Daily Goal ---
   const [sessionCount, setSessionCount] = useState(0);
   const [focusMinutes, setFocusMinutes] = useState(0);
@@ -114,7 +127,8 @@ export default function FocusSessionScreen() {
   useEffect(() => {
     if (!isActive) return;
 
-    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+    const nav = navigation as any;
+    const unsubscribe = nav.addListener?.('beforeRemove', (e: any) => {
       // Prevent navigation away from the timer
       e.preventDefault();
 
@@ -129,7 +143,9 @@ export default function FocusSessionScreen() {
             onPress: () => {
               setIsActive(false);
               setTimeLeft(currentDuration * 60);
-              navigation.dispatch(e.data.action);
+              if (e.data?.action) {
+                nav.dispatch(e.data.action);
+              }
             },
           },
         ]
@@ -210,40 +226,48 @@ export default function FocusSessionScreen() {
     return '#06B6D4'; // Sky Cyan
   }, [sessionMode, theme.primary]);
 
+  // Load selected ringtone preference
+  useEffect(() => {
+    void getSelectedRingtoneId().then((id) => {
+      setSelectedRingtoneId(id);
+    });
+  }, []);
+
+  const activeRingtoneItem = useMemo(
+    () => RINGTONE_LIST.find((r) => r.id === selectedRingtoneId) || RINGTONE_LIST[0],
+    [selectedRingtoneId]
+  );
+
   // --- Audio / Haptic Feedback ---
   const triggerSessionChime = useCallback(() => {
     if (!soundEnabled) return;
+    void playRingtone(selectedRingtoneId);
+  }, [selectedRingtoneId, soundEnabled]);
 
-    // Web Audio synthesizer for crisp offline bell chime
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      try {
-        const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (AudioContext) {
-          const ctx = new AudioContext();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-          osc.frequency.setValueAtTime(880, ctx.currentTime + 0.18); // A5
-          gain.gain.setValueAtTime(0.2, ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.8);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.8);
-        }
-      } catch {
-        // Fallback
-      }
+  const handleTogglePreview = async (ringtoneId: string) => {
+    triggerTapHaptic();
+    if (previewingRingtoneId === ringtoneId) {
+      await stopRingtone();
+      setPreviewingRingtoneId(null);
+    } else {
+      setPreviewingRingtoneId(ringtoneId);
+      await playRingtone(ringtoneId, () => {
+        setPreviewingRingtoneId(null);
+      });
     }
+  };
 
-    // Native mobile haptics
-    try {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {
-      // Ignore if not supported
-    }
-  }, [soundEnabled]);
+  const handleSelectRingtone = async (ringtoneId: string) => {
+    triggerTapHaptic();
+    setSelectedRingtoneId(ringtoneId);
+    await saveSelectedRingtoneId(ringtoneId);
+  };
+
+  const handleCloseRingtoneModal = async () => {
+    await stopRingtone();
+    setPreviewingRingtoneId(null);
+    setIsRingtoneModalOpen(false);
+  };
 
   const triggerTapHaptic = useCallback(() => {
     try {
@@ -363,9 +387,18 @@ export default function FocusSessionScreen() {
               [
                 {
                   text: 'Take 5m Break',
-                  onPress: () => handleSwitchMode('short_break', 5),
+                  onPress: () => {
+                    void stopRingtone();
+                    handleSwitchMode('short_break', 5);
+                  },
                 },
-                { text: 'Done', style: 'cancel' },
+                {
+                  text: 'Done',
+                  style: 'cancel',
+                  onPress: () => {
+                    void stopRingtone();
+                  },
+                },
               ]
             );
           } else {
@@ -375,9 +408,18 @@ export default function FocusSessionScreen() {
               [
                 {
                   text: 'Start Focus',
-                  onPress: () => handleSwitchMode('focus', 25),
+                  onPress: () => {
+                    void stopRingtone();
+                    handleSwitchMode('focus', 25);
+                  },
                 },
-                { text: 'Dismiss', style: 'cancel' },
+                {
+                  text: 'Dismiss',
+                  style: 'cancel',
+                  onPress: () => {
+                    void stopRingtone();
+                  },
+                },
               ]
             );
           }
@@ -404,6 +446,7 @@ export default function FocusSessionScreen() {
 
   const resetTimer = () => {
     triggerTapHaptic();
+    void stopRingtone();
     if (isActive) {
       Alert.alert(
         'Abandon Locked Session?',
@@ -551,27 +594,58 @@ export default function FocusSessionScreen() {
           </View>
         </View>
 
-        <Pressable
-          hitSlop={8}
-          onPress={() => {
-            triggerTapHaptic();
-            setSoundEnabled(!soundEnabled);
-          }}
-          style={({ pressed }) => [
-            styles.soundToggleBtn,
-            {
-              backgroundColor: soundEnabled ? theme.primary + '18' : theme.surfaceSoft,
-              borderColor: soundEnabled ? theme.primary : theme.border,
-            },
-            pressed && styles.pressed,
-          ]}
-        >
-          <Ionicons
-            name={soundEnabled ? 'volume-high' : 'volume-mute-outline'}
-            size={18}
-            color={soundEnabled ? theme.primary : theme.textMuted}
-          />
-        </Pressable>
+        <View style={styles.headerRightCluster}>
+          {/* Ringtone Selection Chip */}
+          <Pressable
+            hitSlop={8}
+            disabled={isActive}
+            onPress={() => {
+              triggerTapHaptic();
+              setIsRingtoneModalOpen(true);
+            }}
+            style={({ pressed }) => [
+              styles.ringtoneBadgeBtn,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+              },
+              isActive && { opacity: 0.6 },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons name="musical-notes" size={13} color={activeRingtoneItem.color} />
+            <Text
+              numberOfLines={1}
+              style={[styles.ringtoneBadgeText, { color: theme.text }]}
+            >
+              {activeRingtoneItem.name}
+            </Text>
+            <Ionicons name="chevron-forward" size={11} color={theme.textMuted} />
+          </Pressable>
+
+          {/* Sound Toggle Button */}
+          <Pressable
+            hitSlop={8}
+            onPress={() => {
+              triggerTapHaptic();
+              setSoundEnabled(!soundEnabled);
+            }}
+            style={({ pressed }) => [
+              styles.soundToggleBtn,
+              {
+                backgroundColor: soundEnabled ? theme.primary + '18' : theme.surfaceSoft,
+                borderColor: soundEnabled ? theme.primary : theme.border,
+              },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons
+              name={soundEnabled ? 'volume-high' : 'volume-mute-outline'}
+              size={18}
+              color={soundEnabled ? theme.primary : theme.textMuted}
+            />
+          </Pressable>
+        </View>
       </View>
 
       {/* Segmented Mode Selector: Focus | Short Break | Long Break */}
@@ -1163,6 +1237,216 @@ export default function FocusSessionScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* 🔔 Focus Ringtone Selection Modal */}
+      <Modal
+        visible={isRingtoneModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseRingtoneModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.ringtoneModalCard,
+              { backgroundColor: theme.surface, borderColor: theme.border },
+            ]}
+          >
+            {/* Modal Header */}
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalHeaderIconWrap}>
+                <Ionicons name="musical-notes" size={20} color={theme.primary} />
+                <View>
+                  <Text style={[styles.modalTitle, { color: theme.text }]}>
+                    Focus Ringtones
+                  </Text>
+                  <Text style={[styles.modalSub, { color: theme.textMuted }]}>
+                    Plays when your session finishes (5–7 seconds)
+                  </Text>
+                </View>
+              </View>
+              <Pressable
+                onPress={handleCloseRingtoneModal}
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.ringtoneModalCloseBtn,
+                  { backgroundColor: theme.surfaceSoft },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={theme.textMuted} />
+              </Pressable>
+            </View>
+
+            {/* Ringtone List */}
+            <ScrollView
+              style={styles.ringtoneListScroll}
+              showsVerticalScrollIndicator={false}
+            >
+              {RINGTONE_LIST.map((item) => {
+                const isSelected = item.id === selectedRingtoneId;
+                const isPlaying = previewingRingtoneId === item.id;
+
+                return (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => handleSelectRingtone(item.id)}
+                    style={({ pressed }) => [
+                      styles.ringtoneItemCard,
+                      {
+                        backgroundColor: isSelected
+                          ? item.color + '12'
+                          : theme.surfaceSoft,
+                        borderColor: isSelected ? item.color : theme.border,
+                      },
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.ringtoneIconCircle,
+                        { backgroundColor: item.color + '22' },
+                      ]}
+                    >
+                      <Ionicons
+                        name={item.icon as any}
+                        size={18}
+                        color={item.color}
+                      />
+                    </View>
+
+                    <View style={styles.ringtoneTextCol}>
+                      <View style={styles.ringtoneTitleRow}>
+                        <Text
+                          style={[
+                            styles.ringtoneItemTitle,
+                            { color: theme.text },
+                            isSelected && { fontWeight: '700' },
+                          ]}
+                        >
+                          {item.name}
+                        </Text>
+                        <View
+                          style={[
+                            styles.durationBadge,
+                            { backgroundColor: theme.surface },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.durationBadgeText,
+                              { color: theme.textMuted },
+                            ]}
+                          >
+                            {item.durationText}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text
+                        style={[
+                          styles.ringtoneItemSubtitle,
+                          { color: theme.textMuted },
+                        ]}
+                      >
+                        {item.subtitle}
+                      </Text>
+                    </View>
+
+                    {/* Preview Button */}
+                    <Pressable
+                      hitSlop={8}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        void handleTogglePreview(item.id);
+                      }}
+                      style={({ pressed }) => [
+                        styles.previewBtn,
+                        {
+                          backgroundColor: isPlaying
+                            ? item.color
+                            : theme.surface,
+                          borderColor: isPlaying ? item.color : theme.border,
+                        },
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Ionicons
+                        name={isPlaying ? 'stop' : 'play'}
+                        size={14}
+                        color={isPlaying ? '#FFFFFF' : item.color}
+                      />
+                    </Pressable>
+
+                    {/* Selection Indicator */}
+                    <View
+                      style={[
+                        styles.ringtoneRadio,
+                        {
+                          borderColor: isSelected ? item.color : theme.border,
+                          backgroundColor: isSelected ? item.color : 'transparent',
+                        },
+                      ]}
+                    >
+                      {isSelected && (
+                        <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {/* Sound Toggle Banner */}
+            <View
+              style={[
+                styles.soundToggleBanner,
+                { backgroundColor: theme.surfaceSoft, borderColor: theme.border },
+              ]}
+            >
+              <View style={styles.soundBannerLeft}>
+                <Ionicons
+                  name={soundEnabled ? 'volume-high' : 'volume-mute'}
+                  size={18}
+                  color={soundEnabled ? theme.primary : theme.textMuted}
+                />
+                <Text style={[styles.soundBannerText, { color: theme.text }]}>
+                  {soundEnabled ? 'Sound is Enabled' : 'Sound is Muted'}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  triggerTapHaptic();
+                  setSoundEnabled(!soundEnabled);
+                }}
+                style={[
+                  styles.soundBannerToggleBtn,
+                  {
+                    backgroundColor: soundEnabled
+                      ? theme.primary
+                      : theme.border,
+                  },
+                ]}
+              >
+                <Text style={styles.soundBannerToggleText}>
+                  {soundEnabled ? 'Mute' : 'Enable'}
+                </Text>
+              </Pressable>
+            </View>
+
+            {/* Done Action */}
+            <Pressable
+              onPress={handleCloseRingtoneModal}
+              style={({ pressed }) => [
+                styles.doneModalBtn,
+                { backgroundColor: theme.primary },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.doneModalBtnText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -1648,5 +1932,152 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.8,
     transform: [{ scale: 0.98 }],
+  },
+  headerRightCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  ringtoneBadgeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    maxWidth: 160,
+  },
+  ringtoneBadgeText: {
+    fontSize: Typography.caption,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  ringtoneModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    padding: Spacing.md,
+    maxHeight: '85%',
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.md,
+  },
+  modalHeaderIconWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  ringtoneModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringtoneListScroll: {
+    maxHeight: 330,
+  },
+  ringtoneItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    marginBottom: 8,
+    gap: 10,
+  },
+  ringtoneIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringtoneTextCol: {
+    flex: 1,
+  },
+  ringtoneTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  ringtoneItemTitle: {
+    fontSize: Typography.body - 1,
+    fontWeight: '600',
+  },
+  durationBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: Radius.sm,
+  },
+  durationBadgeText: {
+    fontSize: Typography.caption - 2,
+    fontWeight: '600',
+  },
+  ringtoneItemSubtitle: {
+    fontSize: Typography.caption,
+  },
+  previewBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringtoneRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: Radius.pill,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  soundToggleBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  soundBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  soundBannerText: {
+    fontSize: Typography.caption,
+    fontWeight: '600',
+  },
+  soundBannerToggleBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+  },
+  soundBannerToggleText: {
+    color: '#FFFFFF',
+    fontSize: Typography.caption,
+    fontWeight: '600',
+  },
+  doneModalBtn: {
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doneModalBtnText: {
+    color: '#FFFFFF',
+    fontSize: Typography.body,
+    fontWeight: '700',
   },
 });

@@ -2,47 +2,49 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
 
-import { useAuthTheme } from '@/hooks/use-auth-theme';
+import { useAppTheme } from '@/contexts/theme-context';
 
 export default function TabLayout() {
-  const theme = useAuthTheme();
+  const { theme } = useAppTheme();
 
   return (
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: theme.primary,
-        tabBarInactiveTintColor: theme.secondary,
+        tabBarInactiveTintColor: theme.textMuted,
         tabBarShowLabel: false,
         tabBarStyle: {
-          // Floating positioning
+          // Floating positioning - spans across phone width with a modern margin gap on both ends
           position: 'absolute',
-          bottom: Platform.OS === 'ios' ? 24 : 16,
-          left: 20,
-          right: 20,
+          bottom: Platform.OS === 'ios' ? 14 : 10,
+          left: 18,
+          right: 18,
 
-          // Styling & Shape
+          // Styling & Shape - sleek, modern rounded floating bar
           backgroundColor: theme.surface,
-          borderRadius: 30,
-          height: 58,
+          borderRadius: 26,
+          height: 48,
           borderTopWidth: 0,
-
           borderWidth: 1,
+          borderColor: theme.border,
+          paddingHorizontal: 8,
           paddingTop: 0,
           paddingBottom: 0,
-          borderColor: theme.border,
 
-          elevation: 8,
-
+          elevation: 6,
           shadowColor: '#000',
           shadowOffset: {
             width: 0,
-            height: 6,
+            height: 3,
           },
           shadowOpacity: 0.12,
-          shadowRadius: 10,
+          shadowRadius: 8,
         },
         tabBarItemStyle: {
-          paddingVertical: 12,
+          height: 48,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingVertical: 0,
         },
         headerShown: false,
       }}
@@ -52,7 +54,11 @@ export default function TabLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={20} color={color} />
+            <Ionicons
+              name={focused ? 'home' : 'home-outline'}
+              size={19}
+              color={(color as string) || theme.primary}
+            />
           ),
         }}
       />
@@ -61,7 +67,11 @@ export default function TabLayout() {
         options={{
           title: 'AI Assistant',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'sparkles' : 'sparkles-outline'} size={20} color={color} />
+            <Ionicons
+              name={focused ? 'sparkles' : 'sparkles-outline'}
+              size={19}
+              color={(color as string) || theme.primary}
+            />
           ),
         }}
       />
@@ -70,7 +80,11 @@ export default function TabLayout() {
         options={{
           title: 'Smart Study Planner',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'calendar' : 'calendar-outline'} size={20} color={color} />
+            <Ionicons
+              name={focused ? 'calendar' : 'calendar-outline'}
+              size={19}
+              color={(color as string) || theme.primary}
+            />
           ),
         }}
       />
@@ -79,7 +93,11 @@ export default function TabLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={20} color={color} />
+            <Ionicons
+              name={focused ? 'person' : 'person-outline'}
+              size={19}
+              color={(color as string) || theme.primary}
+            />
           ),
         }}
       />
