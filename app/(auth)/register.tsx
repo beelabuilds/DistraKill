@@ -11,7 +11,7 @@ import { ScreenContainer } from "@/components/auth/screen-container";
 import { Radius, Spacing, Typography } from "@/constants/auth-theme";
 import { useAuth } from "@/contexts/auth-context";
 import { useAuthTheme } from "@/hooks/use-auth-theme";
-import { isValidEmail } from "@/utils/auth-validation";
+import { getAuthErrorMessage, isValidEmail } from "@/utils/auth-validation";
 
 type RegisterErrors = {
   name?: string;
@@ -78,9 +78,12 @@ export default function RegisterScreen() {
     try {
       await register(name.trim(), email.trim(), password);
       router.replace("/home");
-    } catch {
+    } catch (error: any) {
       setErrors({
-        form: "Unable to create the account right now. Please try again.",
+        form: getAuthErrorMessage(
+          error,
+          "Unable to create the account right now. Please try again."
+        ),
       });
     } finally {
       setLoading(false);

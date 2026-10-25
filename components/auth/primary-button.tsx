@@ -1,8 +1,9 @@
-import { Link, type Href } from "expo-router";
-import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
-
 import { Radius, Spacing, Typography } from "@/constants/auth-theme";
 import { useAuthTheme } from "@/hooks/use-auth-theme";
+import { Ionicons } from "@expo/vector-icons";
+import { Link, type Href } from "expo-router";
+import { useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
 type PrimaryButtonProps = {
   label: string;
@@ -10,6 +11,8 @@ type PrimaryButtonProps = {
   onPress?: () => void | Promise<void>;
   tone?: "primary" | "secondary";
   href?: Href;
+  icon?: keyof typeof Ionicons.glyphMap;
+  showArrow?: boolean;
 };
 
 export function PrimaryButton({
@@ -18,37 +21,56 @@ export function PrimaryButton({
   onPress,
   tone = "primary",
   href,
+  icon,
+  showArrow = true,
 }: PrimaryButtonProps) {
   const theme = useAuthTheme();
+  const [pressed, setPressed] = useState(false);
+  const contentColor = tone === "primary" ? theme.buttonText : theme.text;
 
   const button = (
     <Pressable
       accessibilityRole="button"
       disabled={loading}
       onPress={onPress}
-      style={({ pressed }) => [
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      style={StyleSheet.flatten([
         styles.button,
         {
           backgroundColor:
-            tone === "primary" ? theme.primary : theme.surfaceSoft,
-          borderColor: tone === "primary" ? theme.primary : theme.border,
+            tone === "primary" ? theme.primary : "transparent",
+          borderColor: theme.primary,
+          borderWidth: tone === "primary" ? 1 : 1.5,
         },
         pressed && styles.pressed,
-      ]}
+      ])}
     >
       {loading ? (
         <ActivityIndicator
-          color={tone === "primary" ? theme.buttonText : theme.primary}
+          color={contentColor}
         />
       ) : (
-        <Text
-          style={[
-            styles.label,
-            { color: tone === "primary" ? theme.buttonText : theme.text },
-          ]}
-        >
-          {label}
-        </Text>
+        <>
+          <View style={styles.row}>
+            <View style={styles.leftContent}>
+              {icon ? (
+                <Ionicons name={icon} size={18} color={tone === "primary" ? contentColor : theme.primary} />
+              ) : null}
+              <Text
+                style={[
+                  styles.label,
+                  { color: contentColor },
+                ]}
+              >
+                {label}
+              </Text>
+            </View>
+            {showArrow ? (
+              <Ionicons name="chevron-forward" size={18} color={contentColor} />
+            ) : null}
+          </View>
+        </>
       )}
     </Pressable>
   );
@@ -67,12 +89,25 @@ export function PrimaryButton({
 const styles = StyleSheet.create({
   button: {
     alignItems: "center",
+    alignSelf: "stretch",
+    width: "100%",
     borderRadius: Radius.pill,
     borderWidth: 1,
     flexDirection: "row",
     justifyContent: "center",
-    minHeight: 48,
+    minHeight: 56,
     paddingHorizontal: Spacing.lg,
+  },
+  row: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  leftContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: Spacing.sm,
   },
   label: {
     fontSize: Typography.button,

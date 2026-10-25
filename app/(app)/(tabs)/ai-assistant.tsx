@@ -34,6 +34,7 @@ export default function AiAssistantScreen() {
           <Text style={[styles.listText, { color: theme.textMuted }]}>Automated smart flashcard generator</Text>
         </View>
       </View>
+      <View style={{ height: 100 }} />
     </ScreenContainer>
   );
 }

@@ -49,6 +49,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 38,
     marginBottom: Spacing.sm,
+    alignSelf: "flex-start",
   },
   pressed: {
     opacity: 0.8,

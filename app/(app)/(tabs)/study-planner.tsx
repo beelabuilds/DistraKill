@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import {
   addDoc,
@@ -8,9 +9,10 @@ import {
   onSnapshot,
   updateDoc,
 } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -19,831 +21,913 @@ import {
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
+import { CalendarView } from '@/components/planner/calendar-strip';
+import { TaskCreateModal } from '@/components/planner/task-create-modal';
+import { TaskItem, type PlannerTask } from '@/components/planner/task-item';
 import { db } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
+import {
+  pickPdfDocument,
+  type TaskPdfAttachment,
+} from '@/utils/pdf-utils';
+import {
+  formatDateKey,
+  formatFileSize,
+  formatFriendlyDate,
+  getTodayKey,
+} from '@/utils/planner-utils';
 
-type StudyTask = {
-  id: string;
-  title: string;
-  completed: boolean;
-  createdAt: number;
-};
+function deduplicateTasks(taskList: PlannerTask[]): PlannerTask[] {
+  const seen = new Set<string>();
+  const result: PlannerTask[] = [];
+  for (const t of taskList) {
+    if (t?.id && !seen.has(t.id)) {
+      seen.add(t.id);
+      result.push(t);
+    }
+  }
+  return result;
+}
 
 export default function StudyPlannerScreen() {
   const theme = useAuthTheme();
   const router = useRouter();
   const { user } = useAuth();
-
   const userId = user?.uid;
 
-  const [taskTitle, setTaskTitle] = useState('');
-  const [tasks, setTasks] = useState<StudyTask[]>([]);
+  // Selected date in "YYYY-MM-DD" format
+  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayKey());
+  const [viewMode, setViewMode] = useState<'month' | 'week'>('week');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'pdf' | 'completed'>('all');
+
+  // Quick Add state
+  const [quickTitle, setQuickTitle] = useState('');
+  const [quickPdf, setQuickPdf] = useState<TaskPdfAttachment | null>(null);
+  const [isPickingQuickPdf, setIsPickingQuickPdf] = useState(false);
+  const [isAddingQuick, setIsAddingQuick] = useState(false);
+
+  // Detailed Modal states
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<PlannerTask | null>(null);
+
+  // Data states
+  const [tasks, setTasks] = useState<PlannerTask[]>([]);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
-  const [isAddingTask, setIsAddingTask] = useState(false);
-  const [taskError, setTaskError] = useState('');
+  const [isSavingTask, setIsSavingTask] = useState(false);
 
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
+  // Storage cache key
+  const tasksCacheKey = useMemo(
+    () => `@distrakill_calendar_tasks_${userId || 'guest'}`,
+    [userId]
+  );
 
-  /*
-   * Load this user's tasks from Firestore.
-   * The listener also receives changes automatically.
-   */
+  // 1. Load cached tasks from AsyncStorage for instant startup & offline support
+  useEffect(() => {
+    let isMounted = true;
+    const loadCache = async () => {
+      try {
+        const cachedTasksRaw = await AsyncStorage.getItem(tasksCacheKey);
+        if (isMounted && cachedTasksRaw) {
+          try {
+            const parsedTasks = JSON.parse(cachedTasksRaw);
+            if (Array.isArray(parsedTasks)) {
+              setTasks(deduplicateTasks(parsedTasks));
+            }
+          } catch (err) {
+            console.error('Error parsing cached tasks:', err);
+          }
+        }
+      } catch (err) {
+        console.error('Failed reading planner offline cache:', err);
+      }
+    };
+
+    void loadCache();
+    return () => {
+      isMounted = false;
+    };
+  }, [tasksCacheKey]);
+
+  // 2. Realtime listener for Tasks from Firestore
   useEffect(() => {
     if (!userId) {
-      setTasks([]);
       setIsLoadingTasks(false);
       return;
     }
 
     setIsLoadingTasks(true);
-    setTaskError('');
-
-    const tasksReference = collection(
-      db,
-      'users',
-      userId,
-      'tasks'
-    );
+    const tasksCollection = collection(db, 'users', userId, 'tasks');
 
     const unsubscribe = onSnapshot(
-      tasksReference,
+      tasksCollection,
       (snapshot) => {
-        const loadedTasks: StudyTask[] = snapshot.docs.map(
-          (taskDocument) => {
-            const data = taskDocument.data();
+        const loadedTasks: PlannerTask[] = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            title:
+              typeof data.title === 'string'
+                ? data.title
+                : 'Untitled study task',
+            completed: Boolean(data.completed),
+            createdAt:
+              typeof data.createdAt === 'number'
+                ? data.createdAt
+                : Date.now(),
+            date:
+              typeof data.date === 'string' && data.date
+                ? data.date
+                : typeof data.createdAt === 'number' && data.createdAt > 0
+                  ? formatDateKey(new Date(data.createdAt))
+                  : '',
+            subject:
+              typeof data.subject === 'string' ? data.subject : 'General',
+            priority:
+              data.priority === 'low' ||
+                data.priority === 'high' ||
+                data.priority === 'medium'
+                ? data.priority
+                : 'medium',
+            estimatedMinutes:
+              typeof data.estimatedMinutes === 'number'
+                ? data.estimatedMinutes
+                : 25,
+            pdfAttachment:
+              data.pdfAttachment && typeof data.pdfAttachment === 'object'
+                ? {
+                  name: String(data.pdfAttachment.name || 'Document.pdf'),
+                  uri: String(data.pdfAttachment.uri || ''),
+                  size:
+                    typeof data.pdfAttachment.size === 'number'
+                      ? data.pdfAttachment.size
+                      : undefined,
+                  base64Uri:
+                    typeof data.pdfAttachment.base64Uri === 'string'
+                      ? data.pdfAttachment.base64Uri
+                      : undefined,
+                }
+                : null,
+          };
+        });
 
-            return {
-              id: taskDocument.id,
-              title:
-                typeof data.title === 'string'
-                  ? data.title
-                  : 'Untitled task',
-              completed: Boolean(data.completed),
-              createdAt:
-                typeof data.createdAt === 'number'
-                  ? data.createdAt
-                  : 0,
-            };
-          }
-        );
-
-        loadedTasks.sort(
-          (firstTask, secondTask) =>
-            firstTask.createdAt - secondTask.createdAt
-        );
-
-        setTasks(loadedTasks);
+        const uniqueLoaded = deduplicateTasks(loadedTasks);
+        setTasks(uniqueLoaded);
         setIsLoadingTasks(false);
+
+        // Update local cache
+        void AsyncStorage.setItem(
+          tasksCacheKey,
+          JSON.stringify(uniqueLoaded)
+        ).catch((err) => {
+          console.error('Failed caching tasks to AsyncStorage:', err);
+        });
       },
       (error) => {
-        console.error('Failed to load study tasks:', error);
-        setTaskError(
-          'Could not load your tasks. Check your connection and Firestore rules.'
-        );
+        console.error('Firestore tasks listener error:', error);
         setIsLoadingTasks(false);
       }
     );
 
     return unsubscribe;
-  }, [userId]);
+  }, [tasksCacheKey, userId]);
 
-  // Create a task in Firestore
-  const addTask = async () => {
-    const trimmedTitle = taskTitle.trim();
-
-    if (!userId || !trimmedTitle || isAddingTask) {
-      return;
-    }
-
-    try {
-      setIsAddingTask(true);
-      setTaskError('');
-
-      await addDoc(
-        collection(db, 'users', userId, 'tasks'),
-        {
-          title: trimmedTitle,
-          completed: false,
-          createdAt: Date.now(),
-        }
-      );
-
-      setTaskTitle('');
-    } catch (error) {
-      console.error('Failed to add task:', error);
-      setTaskError('The task could not be added.');
-    } finally {
-      setIsAddingTask(false);
-    }
-  };
-
-  // Mark a task complete or incomplete
-  const toggleTask = async (task: StudyTask) => {
-    if (!userId) {
-      return;
-    }
-
-    try {
-      setTaskError('');
-
-      const taskReference = doc(
-        db,
-        'users',
-        userId,
-        'tasks',
-        task.id
-      );
-
-      await updateDoc(taskReference, {
-        completed: !task.completed,
-      });
-    } catch (error) {
-      console.error('Failed to update task:', error);
-      setTaskError('The task could not be updated.');
-    }
-  };
-
-  // Delete a task from Firestore
-  const deleteTask = async (taskId: string) => {
-    if (!userId) {
-      return;
-    }
-
-    try {
-      setTaskError('');
-
-      const taskReference = doc(
-        db,
-        'users',
-        userId,
-        'tasks',
-        taskId
-      );
-
-      await deleteDoc(taskReference);
-
-      if (editingTaskId === taskId) {
-        setEditingTaskId(null);
-        setEditingTitle('');
+  // Map of total & completed tasks per date for calendar indicators
+  const taskCountsByDate = useMemo(() => {
+    const counts: Record<string, { total: number; completed: number }> = {};
+    for (const t of tasks) {
+      const d = t.date || getTodayKey();
+      if (!counts[d]) {
+        counts[d] = { total: 0, completed: 0 };
       }
-    } catch (error) {
-      console.error('Failed to delete task:', error);
-      setTaskError('The task could not be deleted.');
+      counts[d].total += 1;
+      if (t.completed) {
+        counts[d].completed += 1;
+      }
+    }
+    return counts;
+  }, [tasks]);
+
+  // Map of tasks with PDF attachments per date for calendar indicators
+  const docCountsByDate = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tasks) {
+      if (t.pdfAttachment) {
+        const d = t.date || getTodayKey();
+        counts[d] = (counts[d] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [tasks]);
+
+  // Tasks for the currently selected date
+  const selectedDateTasks = useMemo(() => {
+    return tasks
+      .filter((t) => t.date === selectedDate)
+      .sort((a, b) => {
+        if (a.completed !== b.completed) {
+          return a.completed ? 1 : -1;
+        }
+        return b.createdAt - a.createdAt;
+      });
+  }, [selectedDate, tasks]);
+
+  // Filtered tasks
+  const filteredTasks = useMemo(() => {
+    if (activeFilter === 'pdf') {
+      return selectedDateTasks.filter((t) => Boolean(t.pdfAttachment));
+    }
+    if (activeFilter === 'completed') {
+      return selectedDateTasks.filter((t) => t.completed);
+    }
+    return selectedDateTasks;
+  }, [activeFilter, selectedDateTasks]);
+
+  // Counts for the day
+  const totalTasks = selectedDateTasks.length;
+  const completedTasks = selectedDateTasks.filter((t) => t.completed).length;
+  const pdfTasksCount = selectedDateTasks.filter((t) => Boolean(t.pdfAttachment)).length;
+
+  // Quick Add: Pick PDF
+  const handleQuickPickPdf = async () => {
+    try {
+      setIsPickingQuickPdf(true);
+      const picked = await pickPdfDocument();
+      if (picked) {
+        setQuickPdf(picked);
+      }
+    } catch (err) {
+      console.error('Quick pick error:', err);
+      Alert.alert('Error', 'Unable to pick PDF file.');
+    } finally {
+      setIsPickingQuickPdf(false);
     }
   };
 
-  // Open the task-editing input
-  const startEditingTask = (task: StudyTask) => {
-    setEditingTaskId(task.id);
-    setEditingTitle(task.title);
-  };
+  // Quick Add: Submit Task
+  const handleQuickAddTask = async () => {
+    const trimmed = quickTitle.trim();
+    if (!trimmed || isAddingQuick) return;
 
-  // Save the edited title in Firestore
-  const saveEditedTask = async () => {
-    const trimmedTitle = editingTitle.trim();
-
-    if (!userId || !editingTaskId || !trimmedTitle) {
+    if (!userId) {
+      Alert.alert('Sign In Required', 'Please sign in to schedule study tasks.');
       return;
     }
 
     try {
-      setTaskError('');
+      setIsAddingQuick(true);
 
-      const taskReference = doc(
-        db,
-        'users',
-        userId,
-        'tasks',
-        editingTaskId
+      const sanitizedPdf = quickPdf
+        ? {
+          name: quickPdf.name,
+          uri: quickPdf.uri,
+          size: quickPdf.size ?? 0,
+          base64Uri: quickPdf.base64Uri || null,
+        }
+        : null;
+
+      const newTaskPayload: Record<string, any> = {
+        title: trimmed,
+        subject: 'General',
+        priority: 'medium',
+        estimatedMinutes: 25,
+        date: selectedDate,
+        completed: false,
+        createdAt: Date.now(),
+      };
+
+      if (sanitizedPdf) {
+        newTaskPayload.pdfAttachment = sanitizedPdf;
+      }
+
+      const docAdded = await addDoc(
+        collection(db, 'users', userId, 'tasks'),
+        newTaskPayload
       );
 
-      await updateDoc(taskReference, {
-        title: trimmedTitle,
-      });
+      // Optimistic local add
+      const createdTask: PlannerTask = {
+        id: docAdded.id,
+        title: trimmed,
+        subject: 'General',
+        priority: 'medium',
+        estimatedMinutes: 25,
+        date: selectedDate,
+        completed: false,
+        createdAt: newTaskPayload.createdAt,
+        pdfAttachment: quickPdf,
+      };
 
-      setEditingTaskId(null);
-      setEditingTitle('');
-    } catch (error) {
-      console.error('Failed to edit task:', error);
-      setTaskError('The edited task could not be saved.');
+      setTasks((prev) => deduplicateTasks([createdTask, ...prev]));
+      setQuickTitle('');
+      setQuickPdf(null);
+    } catch (err) {
+      console.error('Failed to quick add task:', err);
+      Alert.alert('Error', 'Could not add task.');
+    } finally {
+      setIsAddingQuick(false);
     }
   };
 
-  const cancelEditingTask = () => {
-    setEditingTaskId(null);
-    setEditingTitle('');
-  };
+  // Detailed modal save handler
+  const handleSaveDetailedTask = useCallback(
+    async (taskData: {
+      id?: string;
+      title: string;
+      subject: string;
+      priority: 'low' | 'medium' | 'high';
+      estimatedMinutes: number;
+      date: string;
+      pdfAttachment?: TaskPdfAttachment | null;
+    }) => {
+      if (!userId) {
+        Alert.alert('Sign In Required', 'Please sign in to save study tasks.');
+        return;
+      }
+
+      try {
+        setIsSavingTask(true);
+
+        const sanitizedPdf = taskData.pdfAttachment
+          ? {
+            name: taskData.pdfAttachment.name,
+            uri: taskData.pdfAttachment.uri,
+            size: taskData.pdfAttachment.size ?? 0,
+            base64Uri: taskData.pdfAttachment.base64Uri || null,
+          }
+          : null;
+
+        if (taskData.id) {
+          const taskRef = doc(db, 'users', userId, 'tasks', taskData.id);
+          const updatePayload: Record<string, any> = {
+            title: taskData.title,
+            subject: taskData.subject,
+            priority: taskData.priority,
+            estimatedMinutes: taskData.estimatedMinutes,
+            date: taskData.date,
+          };
+
+          if (sanitizedPdf) {
+            updatePayload.pdfAttachment = sanitizedPdf;
+          } else {
+            updatePayload.pdfAttachment = null;
+          }
+
+          await updateDoc(taskRef, updatePayload);
+
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskData.id
+                ? {
+                  ...t,
+                  title: taskData.title,
+                  subject: taskData.subject,
+                  priority: taskData.priority,
+                  estimatedMinutes: taskData.estimatedMinutes,
+                  date: taskData.date,
+                  pdfAttachment: taskData.pdfAttachment,
+                }
+                : t
+            )
+          );
+        } else {
+          const newTaskPayload: Record<string, any> = {
+            title: taskData.title,
+            subject: taskData.subject,
+            priority: taskData.priority,
+            estimatedMinutes: taskData.estimatedMinutes,
+            date: taskData.date,
+            completed: false,
+            createdAt: Date.now(),
+          };
+
+          if (sanitizedPdf) {
+            newTaskPayload.pdfAttachment = sanitizedPdf;
+          }
+
+          const docAdded = await addDoc(
+            collection(db, 'users', userId, 'tasks'),
+            newTaskPayload
+          );
+
+          const createdTask: PlannerTask = {
+            id: docAdded.id,
+            title: taskData.title,
+            subject: taskData.subject,
+            priority: taskData.priority,
+            estimatedMinutes: taskData.estimatedMinutes,
+            date: taskData.date,
+            completed: false,
+            createdAt: newTaskPayload.createdAt,
+            pdfAttachment: taskData.pdfAttachment,
+          };
+
+          setTasks((prev) => deduplicateTasks([createdTask, ...prev]));
+        }
+      } catch (err) {
+        console.error('Failed to save detailed task:', err);
+        Alert.alert('Error', 'Unable to save task.');
+      } finally {
+        setIsSavingTask(false);
+      }
+    },
+    [userId]
+  );
+
+  const handleToggleTask = useCallback(
+    async (task: PlannerTask) => {
+      if (!userId) return;
+      const nextCompleted = !task.completed;
+
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, completed: nextCompleted } : t))
+      );
+
+      try {
+        const taskRef = doc(db, 'users', userId, 'tasks', task.id);
+        await updateDoc(taskRef, { completed: nextCompleted });
+      } catch (err) {
+        console.error('Failed to toggle task:', err);
+        setTasks((prev) =>
+          prev.map((t) => (t.id === task.id ? { ...t, completed: task.completed } : t))
+        );
+      }
+    },
+    [userId]
+  );
+
+  const handleDeleteTask = useCallback(
+    async (taskId: string) => {
+      if (!userId) return;
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+
+      try {
+        const taskRef = doc(db, 'users', userId, 'tasks', taskId);
+        await deleteDoc(taskRef);
+      } catch (err) {
+        console.error('Failed to delete task:', err);
+      }
+    },
+    [userId]
+  );
 
   return (
-    <ScreenContainer scrollable>
-      <View
-        style={[
-          styles.iconBubble,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.border,
-          },
-        ]}
-      >
-        <Ionicons
-          name="calendar-outline"
-          size={28}
-          color={theme.primary}
-        />
-      </View>
-
-      <Text style={[styles.title, { color: theme.text }]}>
-        Smart Study Planner
-      </Text>
-
-      <Text style={[styles.description, { color: theme.textMuted }]}>
-        Organize your academic schedules, plan Pomodoro intervals, track active
-        streaks, and distribute assignments systematically.
-      </Text>
-
-      {/* Firestore Task CRUD Card */}
-      <View
-        style={[
-          styles.taskCard,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.border,
-          },
-        ]}
-      >
-        <Text style={[styles.taskCardTitle, { color: theme.text }]}>
-          Add Study Task
-        </Text>
-
-        {!userId && (
-          <Text style={[styles.warningText, { color: theme.textMuted }]}>
-            Please sign in before adding study tasks.
+    <ScreenContainer scrollable contentStyle={{ paddingBottom: 85 }}>
+      {/* Sleek Minimal Header */}
+      <View style={styles.topHeader}>
+        <View>
+          <Text style={[styles.mainTitle, { color: theme.text }]}>
+            Study Planner
           </Text>
-        )}
-
-        <TextInput
-          value={taskTitle}
-          onChangeText={setTaskTitle}
-          onSubmitEditing={addTask}
-          editable={Boolean(userId) && !isAddingTask}
-          placeholder="For example: Study chapter 3"
-          placeholderTextColor={theme.textMuted}
-          returnKeyType="done"
-          style={[
-            styles.taskInput,
-            {
-              backgroundColor: theme.inputBackground,
-              borderColor: theme.border,
-              color: theme.text,
-              opacity: userId ? 1 : 0.6,
-            },
-          ]}
-        />
+          <Text style={[styles.subTitle, { color: theme.textMuted }]}>
+            Focus agenda &amp; PDF attachments
+          </Text>
+        </View>
 
         <Pressable
-          onPress={addTask}
-          disabled={
-            !userId ||
-            !taskTitle.trim() ||
-            isAddingTask
-          }
+          hitSlop={8}
+          onPress={() => router.push('/focus-session' as any)}
           style={({ pressed }) => [
-            styles.addTaskButton,
-            {
-              backgroundColor: theme.primary,
-              opacity:
-                !userId ||
-                !taskTitle.trim() ||
-                isAddingTask
-                  ? 0.5
-                  : pressed
-                    ? 0.8
-                    : 1,
-            },
+            styles.focusBtn,
+            { backgroundColor: theme.primary },
+            pressed && styles.pressed,
           ]}
         >
-          {isAddingTask ? (
-            <ActivityIndicator
-              size="small"
-              color={theme.buttonText}
-            />
-          ) : (
-            <>
-              <Ionicons
-                name="add-circle-outline"
-                size={20}
-                color={theme.buttonText}
-              />
-
-              <Text
-                style={[
-                  styles.addTaskButtonText,
-                  {
-                    color: theme.buttonText,
-                  },
-                ]}
-              >
-                Add Task
-              </Text>
-            </>
-          )}
-        </Pressable>
-
-        {taskError ? (
-          <Text style={styles.errorText}>
-            {taskError}
+          <Ionicons name="hourglass" size={14} color={theme.buttonText} />
+          <Text style={[styles.focusBtnText, { color: theme.buttonText }]}>
+            Focus
           </Text>
-        ) : null}
+        </Pressable>
+      </View>
 
-        {isLoadingTasks ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator
-              size="small"
-              color={theme.primary}
-            />
+      {/* Modern Calendar Strip with Fixed Week Navigation */}
+      <CalendarView
+        selectedDate={selectedDate}
+        onSelectDate={(date) => setSelectedDate(date)}
+        taskCountsByDate={taskCountsByDate}
+        docCountsByDate={docCountsByDate}
+        viewMode={viewMode}
+        onChangeViewMode={(mode) => setViewMode(mode)}
+      />
 
-            <Text
-              style={[
-                styles.loadingText,
-                { color: theme.textMuted },
-              ]}
-            >
-              Loading your tasks...
-            </Text>
-          </View>
-        ) : tasks.length === 0 ? (
-          <Text
+      {/* Date Title & Progress Line */}
+      <View style={styles.dateHeaderRow}>
+        <Text style={[styles.dateHeaderText, { color: theme.text }]}>
+          {formatFriendlyDate(selectedDate)}
+        </Text>
+
+        {totalTasks > 0 ? (
+          <View
             style={[
-              styles.emptyText,
-              { color: theme.textMuted },
+              styles.progressPill,
+              {
+                backgroundColor:
+                  completedTasks === totalTasks
+                    ? '#D1FAE5'
+                    : theme.surfaceSoft,
+              },
             ]}
           >
-            No study tasks added yet.
-          </Text>
-        ) : (
-          tasks.map((task) => (
-            <View
-              key={task.id}
+            <Text
               style={[
-                styles.taskItem,
+                styles.progressPillText,
                 {
-                  backgroundColor: theme.inputBackground,
-                  borderColor: theme.border,
+                  color:
+                    completedTasks === totalTasks
+                      ? '#059669'
+                      : theme.textMuted,
                 },
               ]}
             >
-              {editingTaskId === task.id ? (
-                <>
-                  <TextInput
-                    value={editingTitle}
-                    onChangeText={setEditingTitle}
-                    onSubmitEditing={saveEditedTask}
-                    autoFocus
-                    returnKeyType="done"
-                    style={[
-                      styles.editInput,
-                      {
-                        backgroundColor: theme.surface,
-                        borderColor: theme.primary,
-                        color: theme.text,
-                      },
-                    ]}
-                  />
+              {completedTasks}/{totalTasks} done
+            </Text>
+          </View>
+        ) : null}
+      </View>
 
-                  <Pressable
-                    onPress={saveEditedTask}
-                    style={styles.iconButton}
-                  >
-                    <Ionicons
-                      name="checkmark-circle-outline"
-                      size={24}
-                      color={theme.primary}
-                    />
-                  </Pressable>
+      {/* Clean Quick-Add Input Card */}
+      <View
+        style={[
+          styles.quickAddContainer,
+          { backgroundColor: theme.surface, borderColor: theme.border },
+        ]}
+      >
+        <View style={styles.quickAddInputRow}>
+          <TextInput
+            value={quickTitle}
+            onChangeText={setQuickTitle}
+            onSubmitEditing={handleQuickAddTask}
+            placeholder="Add a study task for this date..."
+            placeholderTextColor={theme.textMuted}
+            returnKeyType="done"
+            style={[styles.quickTextInput, { color: theme.text }]}
+          />
 
-                  <Pressable
-                    onPress={cancelEditingTask}
-                    style={styles.iconButton}
-                  >
-                    <Ionicons
-                      name="close-circle-outline"
-                      size={24}
-                      color={theme.textMuted}
-                    />
-                  </Pressable>
-                </>
-              ) : (
-                <>
-                  <Pressable
-                    onPress={() => toggleTask(task)}
-                    style={styles.iconButton}
-                  >
-                    <Ionicons
-                      name={
-                        task.completed
-                          ? 'checkbox-outline'
-                          : 'square-outline'
-                      }
-                      size={23}
-                      color={theme.primary}
-                    />
-                  </Pressable>
+          {/* Quick PDF Attachment Button */}
+          <Pressable
+            hitSlop={8}
+            disabled={isPickingQuickPdf}
+            onPress={handleQuickPickPdf}
+            style={({ pressed }) => [
+              styles.quickActionIconBtn,
+              quickPdf && { backgroundColor: '#FEE2E2' },
+              pressed && styles.pressed,
+            ]}
+          >
+            {isPickingQuickPdf ? (
+              <ActivityIndicator size="small" color={theme.primary} />
+            ) : (
+              <Ionicons
+                name={quickPdf ? 'document-text' : 'attach-outline'}
+                size={20}
+                color={quickPdf ? '#EF4444' : theme.textMuted}
+              />
+            )}
+          </Pressable>
 
-                  <Text
-                    style={[
-                      styles.taskText,
-                      {
-                        color: task.completed
-                          ? theme.textMuted
-                          : theme.text,
-                        textDecorationLine: task.completed
-                          ? 'line-through'
-                          : 'none',
-                      },
-                    ]}
-                  >
-                    {task.title}
-                  </Text>
+          {/* Open Detailed Modal */}
+          <Pressable
+            hitSlop={8}
+            onPress={() => {
+              setEditingTask(null);
+              setIsTaskModalOpen(true);
+            }}
+            style={({ pressed }) => [
+              styles.quickActionIconBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons name="options-outline" size={19} color={theme.textMuted} />
+          </Pressable>
 
-                  <Pressable
-                    onPress={() => startEditingTask(task)}
-                    style={styles.iconButton}
-                  >
-                    <Ionicons
-                      name="create-outline"
-                      size={22}
-                      color={theme.primary}
-                    />
-                  </Pressable>
+          {/* Add Button */}
+          <Pressable
+            disabled={!quickTitle.trim() || isAddingQuick}
+            onPress={handleQuickAddTask}
+            style={({ pressed }) => [
+              styles.quickAddSubmitBtn,
+              {
+                backgroundColor: theme.primary,
+                opacity: quickTitle.trim() && !isAddingQuick ? 1 : 0.4,
+              },
+              pressed && styles.pressed,
+            ]}
+          >
+            {isAddingQuick ? (
+              <ActivityIndicator size="small" color={theme.buttonText} />
+            ) : (
+              <Ionicons name="add" size={18} color={theme.buttonText} />
+            )}
+          </Pressable>
+        </View>
 
-                  <Pressable
-                    onPress={() => deleteTask(task.id)}
-                    style={styles.iconButton}
-                  >
-                    <Ionicons
-                      name="trash-outline"
-                      size={21}
-                      color="#D9534F"
-                    />
-                  </Pressable>
-                </>
-              )}
+        {/* Selected PDF preview chip under quick add input */}
+        {quickPdf ? (
+          <View style={styles.quickPdfPreviewRow}>
+            <View style={styles.quickPdfChip}>
+              <Ionicons name="document-text" size={12} color="#EF4444" />
+              <Text
+                numberOfLines={1}
+                style={[styles.quickPdfChipText, { color: theme.text }]}
+              >
+                {quickPdf.name} ({formatFileSize(quickPdf.size)})
+              </Text>
+              <Pressable
+                hitSlop={6}
+                onPress={() => setQuickPdf(null)}
+                style={styles.quickPdfRemove}
+              >
+                <Ionicons name="close-circle" size={14} color={theme.textMuted} />
+              </Pressable>
             </View>
+          </View>
+        ) : null}
+      </View>
+
+      {/* Filter Tabs (Compact and quiet) */}
+      <View style={styles.filterRow}>
+        <Pressable
+          onPress={() => setActiveFilter('all')}
+          style={[
+            styles.filterChip,
+            activeFilter === 'all' && [
+              styles.filterChipActive,
+              { borderColor: theme.primary, backgroundColor: theme.primary + '14' },
+            ],
+          ]}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              {
+                color: activeFilter === 'all' ? theme.primary : theme.textMuted,
+                fontWeight: activeFilter === 'all' ? '700' : '500',
+              },
+            ]}
+          >
+            All ({totalTasks})
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => setActiveFilter('pdf')}
+          style={[
+            styles.filterChip,
+            activeFilter === 'pdf' && [
+              styles.filterChipActive,
+              { borderColor: '#EF4444', backgroundColor: '#FEE2E2' },
+            ],
+          ]}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              {
+                color: activeFilter === 'pdf' ? '#EF4444' : theme.textMuted,
+                fontWeight: activeFilter === 'pdf' ? '700' : '500',
+              },
+            ]}
+          >
+            With PDFs ({pdfTasksCount})
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => setActiveFilter('completed')}
+          style={[
+            styles.filterChip,
+            activeFilter === 'completed' && [
+              styles.filterChipActive,
+              { borderColor: '#10B981', backgroundColor: '#D1FAE5' },
+            ],
+          ]}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              {
+                color: activeFilter === 'completed' ? '#059669' : theme.textMuted,
+                fontWeight: activeFilter === 'completed' ? '700' : '500',
+              },
+            ]}
+          >
+            Done ({completedTasks})
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* Task List */}
+      <View style={styles.tasksContainer}>
+        {isLoadingTasks && tasks.length === 0 ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={[styles.loadingText, { color: theme.textMuted }]}>
+              Loading tasks...
+            </Text>
+          </View>
+        ) : filteredTasks.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Ionicons
+              name={
+                activeFilter === 'pdf'
+                  ? 'document-text-outline'
+                  : 'checkmark-done-circle-outline'
+              }
+              size={28}
+              color={theme.textMuted}
+            />
+            <Text style={[styles.emptyText, { color: theme.textMuted }]}>
+              {activeFilter === 'pdf'
+                ? 'No tasks with PDFs for this day'
+                : activeFilter === 'completed'
+                  ? 'No completed tasks yet'
+                  : 'No tasks scheduled for this day'}
+            </Text>
+          </View>
+        ) : (
+          filteredTasks.map((task, index) => (
+            <TaskItem
+              key={`${task.id}-${index}`}
+              task={task}
+              onToggle={handleToggleTask}
+              onDelete={handleDeleteTask}
+              onEdit={(t) => {
+                setEditingTask(t);
+                setIsTaskModalOpen(true);
+              }}
+            />
           ))
         )}
       </View>
 
-      {/* Focus Session Card */}
-      <Pressable
-        onPress={() => router.push('/focus-session' as never)}
-        style={({ pressed }) => [
-          styles.focusCard,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.primary,
-            opacity: pressed ? 0.9 : 1,
-            transform: [{ scale: pressed ? 0.98 : 1 }],
-          },
-        ]}
-      >
-        <View style={styles.focusHeader}>
-          <View
-            style={[
-              styles.focusIconBackground,
-              {
-                backgroundColor: theme.inputBackground,
-              },
-            ]}
-          >
-            <Ionicons
-              name="hourglass"
-              size={24}
-              color={theme.primary}
-            />
-          </View>
-
-          <View style={styles.focusContent}>
-            <Text
-              style={[
-                styles.focusTitle,
-                { color: theme.text },
-              ]}
-            >
-              Start Focus Session
-            </Text>
-
-            <Text
-              style={[
-                styles.focusDescription,
-                { color: theme.textMuted },
-              ]}
-            >
-              Begin a 25-minute distraction-free Pomodoro timer block now.
-            </Text>
-          </View>
-        </View>
-
-        <View
-          style={[
-            styles.focusActionButton,
-            {
-              backgroundColor: theme.primary,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.focusActionButtonText,
-              {
-                color: theme.buttonText,
-              },
-            ]}
-          >
-            Launch Timer
-          </Text>
-
-          <Ionicons
-            name="arrow-forward"
-            size={16}
-            color={theme.buttonText}
-          />
-        </View>
-      </Pressable>
-
-      {/* Planner Overview */}
-      <View
-        style={[
-          styles.placeholderCard,
-          {
-            backgroundColor: theme.surface,
-            borderColor: theme.border,
-          },
-        ]}
-      >
-        <Text
-          style={[
-            styles.cardTitle,
-            { color: theme.text },
-          ]}
-        >
-          Planner Overview
-        </Text>
-
-        <View style={styles.listItem}>
-          <Ionicons
-            name="alarm-outline"
-            size={18}
-            color={theme.primary}
-          />
-
-          <Text
-            style={[
-              styles.listText,
-              { color: theme.textMuted },
-            ]}
-          >
-            Custom study intervals &amp; Pomodoro timer
-          </Text>
-        </View>
-
-        <View style={styles.listItem}>
-          <Ionicons
-            name="hourglass-outline"
-            size={18}
-            color={theme.primary}
-          />
-
-          <Text
-            style={[
-              styles.listText,
-              { color: theme.textMuted },
-            ]}
-          >
-            Streak tracking &amp; motivational milestones
-          </Text>
-        </View>
-
-        <View style={styles.listItem}>
-          <Ionicons
-            name="stats-chart-outline"
-            size={18}
-            color={theme.primary}
-          />
-
-          <Text
-            style={[
-              styles.listText,
-              { color: theme.textMuted },
-            ]}
-          >
-            Daily productivity graphs &amp; analytical reports
-          </Text>
-        </View>
-      </View>
+      {/* Modal for Detailed Task Creation / Editing */}
+      <TaskCreateModal
+        visible={isTaskModalOpen}
+        onClose={() => {
+          setIsTaskModalOpen(false);
+          setEditingTask(null);
+        }}
+        selectedDate={selectedDate}
+        taskToEdit={editingTask}
+        onSubmit={handleSaveDetailedTask}
+        loading={isSavingTask}
+      />
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  iconBubble: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    borderRadius: Radius.pill,
-    borderWidth: 1.5,
-    height: 64,
-    justifyContent: 'center',
-    width: 64,
-  },
-
-  title: {
-    fontSize: Typography.title + 4,
-    fontWeight: '800',
-    letterSpacing: -0.6,
-    marginTop: Spacing.lg,
-    textAlign: 'center',
-  },
-
-  description: {
-    fontSize: Typography.body - 1,
-    lineHeight: 22,
-    marginTop: Spacing.sm,
-    textAlign: 'center',
-  },
-
-  taskCard: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    gap: Spacing.sm,
-    marginTop: Spacing.xl,
-    padding: Spacing.md,
-  },
-
-  taskCardTitle: {
-    fontSize: Typography.body,
-    fontWeight: '800',
-  },
-
-  warningText: {
-    fontSize: Typography.caption + 1,
-  },
-
-  taskInput: {
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    fontSize: Typography.body - 1,
-    minHeight: 48,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-
-  addTaskButton: {
-    alignItems: 'center',
-    borderRadius: Radius.sm,
+  topHeader: {
     flexDirection: 'row',
-    gap: Spacing.xs,
-    height: 46,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.sm + 2,
+    paddingTop: 4,
   },
-
-  addTaskButtonText: {
-    fontSize: Typography.button,
+  mainTitle: {
+    fontSize: Typography.title,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  subTitle: {
+    fontSize: Typography.caption,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  focusBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+  },
+  focusBtnText: {
+    fontSize: Typography.caption,
     fontWeight: '700',
   },
-
-  loadingContainer: {
-    alignItems: 'center',
+  dateHeaderRow: {
     flexDirection: 'row',
-    gap: Spacing.sm,
-    justifyContent: 'center',
-    paddingVertical: Spacing.sm,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: Spacing.xs,
+    marginBottom: 6,
+    paddingHorizontal: 2,
   },
-
+  dateHeaderText: {
+    fontSize: Typography.body,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  progressPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  progressPillText: {
+    fontSize: Typography.caption - 1,
+    fontWeight: '700',
+  },
+  quickAddContainer: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: Spacing.xs + 4,
+    gap: 6,
+  },
+  quickAddInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  quickTextInput: {
+    flex: 1,
+    fontSize: Typography.body - 1,
+    paddingVertical: 6,
+  },
+  quickActionIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickAddSubmitBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickPdfPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 2,
+  },
+  quickPdfChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+    maxWidth: '90%',
+  },
+  quickPdfChipText: {
+    fontSize: Typography.caption - 1,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  quickPdfRemove: {
+    padding: 2,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: Spacing.sm,
+    paddingHorizontal: 2,
+  },
+  filterChip: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  filterChipActive: {
+    borderWidth: 1,
+  },
+  filterChipText: {
+    fontSize: Typography.caption - 1,
+  },
+  tasksContainer: {
+    gap: 8,
+    marginBottom: Spacing.xl,
+  },
+  loadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: Spacing.lg,
+  },
   loadingText: {
     fontSize: Typography.caption + 1,
   },
-
+  emptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: Spacing.xl,
+  },
   emptyText: {
     fontSize: Typography.caption + 1,
-    marginTop: Spacing.xs,
-    textAlign: 'center',
   },
-
-  errorText: {
-    color: '#D9534F',
-    fontSize: Typography.caption + 1,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-
-  taskItem: {
-    alignItems: 'center',
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: Spacing.xs,
-    minHeight: 52,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.sm,
-  },
-
-  taskText: {
-    flex: 1,
-    fontSize: Typography.body - 1,
-  },
-
-  editInput: {
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    flex: 1,
-    fontSize: Typography.body - 1,
-    minHeight: 40,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
-  },
-
-  iconButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 36,
-    minWidth: 36,
-  },
-
-  focusCard: {
-    borderRadius: Radius.md,
-    borderWidth: 1.5,
-    gap: Spacing.md,
-    marginTop: Spacing.md + 4,
-    padding: Spacing.md,
-  },
-
-  focusHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: Spacing.md,
-  },
-
-  focusIconBackground: {
-    alignItems: 'center',
-    borderRadius: Radius.sm,
-    height: 48,
-    justifyContent: 'center',
-    width: 48,
-  },
-
-  focusContent: {
-    flex: 1,
-    gap: 2,
-  },
-
-  focusTitle: {
-    fontSize: Typography.body,
-    fontWeight: '800',
-  },
-
-  focusDescription: {
-    fontSize: Typography.caption + 1,
-    lineHeight: 16,
-  },
-
-  focusActionButton: {
-    alignItems: 'center',
-    borderRadius: Radius.sm,
-    flexDirection: 'row',
-    gap: Spacing.xs,
-    height: 44,
-    justifyContent: 'center',
-  },
-
-  focusActionButtonText: {
-    fontSize: Typography.button,
-    fontWeight: '700',
-  },
-
-  placeholderCard: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    gap: Spacing.md,
-    marginBottom: Spacing.xl,
-    marginTop: Spacing.md + 4,
-    padding: Spacing.md + 2,
-  },
-
-  cardTitle: {
-    fontSize: Typography.body,
-    fontWeight: '800',
-  },
-
-  listItem: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-
-  listText: {
-    flex: 1,
-    fontSize: Typography.body - 1,
+  pressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.97 }],
   },
 });
