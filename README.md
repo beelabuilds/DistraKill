@@ -6,28 +6,28 @@ The app combines task planning, focus tracking, Islamic duas, AI-powered study a
 
 ---
 
-## ✨ Features
+## Features
 
-### 🏠 Student Dashboard
+### Student Dashboard
 - Clean student-focused dashboard
 - Quick access to important study tools
 - Displays useful study information
 - Supports light and dark themes
 
-### 📚 Study Planner
+### Study Planner
 - Create and manage study tasks
 - Track pending and completed tasks
 - Organize tasks by date
 - View what needs to be studied today
 - AI Assistant can access planner information
 
-### ⏱️ Focus Mode
+### Focus Mode
 - Focus/Pomodoro-style study sessions
 - Track completed focus sessions
 - Monitor focus progress
 - AI Assistant can provide focus progress information
 
-### 🤖 AI Assistant
+### AI Assistant
 DistraKill includes an AI-powered assistant that supports both app-specific and general questions.
 
 The assistant can answer questions such as:
@@ -49,7 +49,7 @@ The AI Assistant also supports:
 - App-aware responses
 - Fast Gemini Flash model integration
 
-### 🤲 Dua Section
+### Dua Section
 Students can access duas based on different situations, including:
 
 - Studying
@@ -72,7 +72,7 @@ DistraKill includes a global theme system with:
 - Persistent theme preference
 - Theme toggle throughout the application
 
-### ✨ Animated Background
+### Animated Background
 The authenticated application includes a **GhostFibers-inspired animated background**.
 
 - Animated cyan/teal fibers
@@ -83,7 +83,7 @@ The authenticated application includes a **GhostFibers-inspired animated backgro
 
 ---
 
-# 🛠️ Technology Stack
+# Technology Stack
 
 DistraKill is built using:
 
@@ -148,7 +148,7 @@ DistraKill/
 
 ---
 
-# 🚀 Getting Started
+# Getting Started
 
 ## 1. Clone the repository
 
@@ -206,7 +206,7 @@ For a production application, sensitive AI access should be moved to a secure ba
 
 ---
 
-# ▶️ Running the Application
+# Running the Application
 
 Start Expo using:
 
@@ -238,7 +238,7 @@ npx expo start --tunnel --clear
 
 ---
 
-# 🔥 Firebase
+# Firebase
 
 DistraKill uses Firebase for application services including:
 
@@ -263,7 +263,7 @@ Firebase Storage is not currently required for the application's MVP.
 
 ---
 
-# 🤖 AI Architecture
+# AI Architecture
 
 The AI Assistant uses two main response paths.
 
