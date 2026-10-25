@@ -4,6 +4,9 @@ import { Platform } from 'react-native';
 
 import { useAppTheme } from '@/contexts/theme-context';
 
+export const TAB_BAR_HEIGHT = 48;
+export const TAB_BAR_BOTTOM = Platform.OS === 'ios' ? 14 : 10;
+
 export default function TabLayout() {
   const { theme } = useAppTheme();
 
@@ -16,14 +19,14 @@ export default function TabLayout() {
         tabBarStyle: {
           // Floating positioning - spans across phone width with a modern margin gap on both ends
           position: 'absolute',
-          bottom: Platform.OS === 'ios' ? 14 : 10,
+          bottom: TAB_BAR_BOTTOM,
           left: 18,
           right: 18,
 
           // Styling & Shape - sleek, modern rounded floating bar
           backgroundColor: theme.surface,
           borderRadius: 26,
-          height: 48,
+          height: TAB_BAR_HEIGHT,
           borderTopWidth: 0,
           borderWidth: 1,
           borderColor: theme.border,
@@ -41,7 +44,7 @@ export default function TabLayout() {
           shadowRadius: 8,
         },
         tabBarItemStyle: {
-          height: 48,
+          height: TAB_BAR_HEIGHT,
           justifyContent: 'center',
           alignItems: 'center',
           paddingVertical: 0,

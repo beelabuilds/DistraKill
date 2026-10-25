@@ -2,22 +2,22 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  updateDoc,
+    addDoc,
+    collection,
+    deleteDoc,
+    doc,
+    onSnapshot,
+    updateDoc,
 } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -28,15 +28,15 @@ import { db } from '@/config/firebase';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
+import { getTaskDateKey, isTaskCompleted } from '@/services/app-context-service';
 import {
-  pickPdfDocument,
-  type TaskPdfAttachment,
+    pickPdfDocument,
+    type TaskPdfAttachment,
 } from '@/utils/pdf-utils';
 import {
-  formatDateKey,
-  formatFileSize,
-  formatFriendlyDate,
-  getTodayKey,
+    formatFileSize,
+    formatFriendlyDate,
+    getTodayKey
 } from '@/utils/planner-utils';
 
 function deduplicateTasks(taskList: PlannerTask[]): PlannerTask[] {
@@ -131,17 +131,12 @@ export default function StudyPlannerScreen() {
               typeof data.title === 'string'
                 ? data.title
                 : 'Untitled study task',
-            completed: Boolean(data.completed),
+            completed: isTaskCompleted(data),
             createdAt:
               typeof data.createdAt === 'number'
                 ? data.createdAt
                 : Date.now(),
-            date:
-              typeof data.date === 'string' && data.date
-                ? data.date
-                : typeof data.createdAt === 'number' && data.createdAt > 0
-                  ? formatDateKey(new Date(data.createdAt))
-                  : '',
+            date: getTaskDateKey(data.date) ?? getTaskDateKey(data.createdAt) ?? '',
             subject:
               typeof data.subject === 'string' ? data.subject : 'General',
             priority:
