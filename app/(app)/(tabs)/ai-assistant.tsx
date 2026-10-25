@@ -9,9 +9,10 @@ import { ThemeToggleButton } from '@/components/ui/theme-toggle-button';
 import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
-import { answerQuestion } from '@/services/ai-service';
+import { answerQuestion, detectAssistantIntent } from '@/services/ai-service';
+import type { GeneralChatHistory } from '@/services/general-ai-service';
 
-type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; createdAt: Date };
+type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; createdAt: Date; source: 'app' | 'general' };
 
 const SUGGESTIONS = ['What should I study today?', 'Show my pending tasks', 'Give me a dua for studying', 'How is my focus progress?'];
 
@@ -24,6 +25,7 @@ export default function AiAssistantScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const listRef = useRef<ComponentRef<typeof FlatList<ChatMessage>>>(null);
+  const messageIdRef = useRef(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -35,15 +37,37 @@ export default function AiAssistantScreen() {
   const sendMessage = async (value = input) => {
     const text = value.trim();
     if (!text || isLoading) return;
+    const intent = detectAssistantIntent(text);
+    messageIdRef.current += 1;
+    const messageId = messageIdRef.current;
+    const assistantId = `${messageId}-assistant`;
     setInput('');
     setIsLoading(true);
-    setMessages((current) => [...current, { id: `${Date.now()}-user`, role: 'user', text, createdAt: new Date() }]);
+    let assistantIdForRequest: string | null = null;
+    setMessages((current) => [...current, { id: `${messageId}-user`, role: 'user', text, createdAt: new Date(), source: intent === 'general' ? 'general' : 'app' }]);
     scrollToLatest();
     try {
-      const result = await answerQuestion(text, user?.uid, user?.name);
-      setMessages((current) => [...current, { id: `${Date.now()}-assistant`, role: 'assistant', text: result.text, createdAt: new Date() }]);
+      const generalHistory: GeneralChatHistory = messages
+        .filter((message) => message.source === 'general')
+        .slice(-6)
+        .map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', text: message.text }));
+      assistantIdForRequest = assistantId;
+      if (intent === 'general') {
+        setMessages((current) => [...current, { id: assistantId, role: 'assistant', text: '', createdAt: new Date(), source: 'general' }]);
+      }
+      const result = await answerQuestion(text, user?.uid, user?.name, generalHistory, intent === 'general'
+        ? (chunk) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: message.text + chunk } : message))
+        : undefined);
+      if (intent === 'general') {
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: result.text } : message));
+      } else {
+        setMessages((current) => [...current, { id: assistantId, role: 'assistant', text: result.text, createdAt: new Date(), source: 'app' }]);
+      }
     } catch {
-      setMessages((current) => [...current, { id: `${Date.now()}-error`, role: 'assistant', text: 'I could not read that information right now. Please check your connection and try again.', createdAt: new Date() }]);
+      const errorText = 'I could not read that information right now. Please check your connection and try again.';
+      setMessages((current) => assistantIdForRequest
+        ? current.map((message) => message.id === assistantIdForRequest ? { ...message, text: errorText } : message)
+        : [...current, { id: `${messageId}-error`, role: 'assistant', text: errorText, createdAt: new Date(), source: 'app' }]);
     } finally {
       setIsLoading(false);
       scrollToLatest();
@@ -85,7 +109,7 @@ export default function AiAssistantScreen() {
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="handled"
           ListEmptyComponent={listHeader ?? undefined}
-          ListFooterComponent={isLoading ? <View style={[styles.typing, { backgroundColor: theme.surface, borderColor: theme.border }]}><ActivityIndicator size="small" color={theme.primary} /><Text style={{ color: theme.textMuted }}>Checking your study data...</Text></View> : undefined}
+          ListFooterComponent={isLoading ? <View style={[styles.typing, { backgroundColor: theme.surface, borderColor: theme.border }]}><ActivityIndicator size="small" color={theme.primary} /><Text style={{ color: theme.textMuted }}>Thinking...</Text></View> : undefined}
           onContentSizeChange={scrollToLatest}
           renderItem={renderMessage}
         />

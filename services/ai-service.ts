@@ -6,10 +6,12 @@ import {
     getTodayTasks,
     type AppTask,
 } from '@/services/app-context-service';
+import { generateGeneralAnswerStream, type GeneralChatHistory } from '@/services/general-ai-service';
 import { getTodayKey } from '@/utils/planner-utils';
 
 export type AssistantIntent = 'dua' | 'tasks' | 'studyPlan' | 'focus' | 'profile' | 'general';
-export type AssistantResult = { text: string; source: 'app' | 'provider-unavailable' };
+export type AssistantResult = { text: string; source: 'app' | 'general-ai' | 'provider-unavailable' };
+export type AssistantChunkHandler = (chunk: string) => void;
 
 const normalize = (question: string) => question.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
 const hasAny = (text: string, words: string[]) => words.some((word) => text.includes(word));
@@ -67,7 +69,7 @@ async function answerDua(question: string): Promise<AssistantResult> {
   };
 }
 
-export async function answerQuestion(question: string, userId?: string, authenticatedName?: string): Promise<AssistantResult> {
+export async function answerQuestion(question: string, userId?: string, authenticatedName?: string, generalHistory?: GeneralChatHistory, onGeneralChunk?: AssistantChunkHandler): Promise<AssistantResult> {
   const intent = detectAssistantIntent(question);
   try {
     if (intent === 'dua') return await answerDua(question);
@@ -102,5 +104,6 @@ export async function answerQuestion(question: string, userId?: string, authenti
     return { source: 'app', text: 'I could not access that DistraKill data right now. Please check your connection and try again.' };
   }
 
-  return { source: 'provider-unavailable', text: 'General AI is not connected yet. I can currently help with your DistraKill tasks, study plans, focus progress, and duas.' };
+  const answer = await generateGeneralAnswerStream(question, generalHistory, onGeneralChunk ?? (() => undefined));
+  return { source: 'general-ai', text: answer };
 }
