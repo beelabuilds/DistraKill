@@ -1,15 +1,16 @@
 import { ReactNode } from "react";
 import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  View,
-  type StyleProp,
-  type ViewStyle,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    View,
+    type StyleProp,
+    type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AppAnimatedBackground } from "@/components/backgrounds/app-animated-background";
 import { useAuthTheme } from "@/hooks/use-auth-theme";
 
 type ScreenContainerProps = {
@@ -18,6 +19,7 @@ type ScreenContainerProps = {
   contentStyle?: StyleProp<ViewStyle>;
   contentWidthStyle?: StyleProp<ViewStyle>;
   topRight?: ReactNode;
+  authenticatedBackground?: boolean;
 };
 
 export function ScreenContainer({
@@ -26,6 +28,7 @@ export function ScreenContainer({
   contentStyle,
   contentWidthStyle,
   topRight,
+  authenticatedBackground = false,
 }: ScreenContainerProps) {
   const theme = useAuthTheme();
 
@@ -33,7 +36,7 @@ export function ScreenContainer({
     <ScrollView
       contentContainerStyle={[
         styles.scrollContent,
-        { backgroundColor: theme.background },
+        { backgroundColor: authenticatedBackground ? 'transparent' : theme.background },
         contentStyle,
       ]}
       keyboardShouldPersistTaps="handled"
@@ -49,8 +52,9 @@ export function ScreenContainer({
 
   return (
     <SafeAreaView
-      style={[styles.safeArea, { backgroundColor: theme.background }]}
+      style={[styles.safeArea, { backgroundColor: authenticatedBackground ? 'transparent' : theme.background }]}
     >
+      {authenticatedBackground ? <AppAnimatedBackground /> : null}
       <View
         pointerEvents="none"
         style={[styles.backgroundGlow, { backgroundColor: theme.glow }]}

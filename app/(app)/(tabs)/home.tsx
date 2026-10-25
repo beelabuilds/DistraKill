@@ -2,19 +2,19 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
-  collection,
-  doc,
-  onSnapshot,
-  updateDoc,
+    collection,
+    doc,
+    onSnapshot,
+    updateDoc,
 } from 'firebase/firestore';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -180,7 +180,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <ScreenContainer scrollable contentStyle={{ paddingBottom: 85 }}>
+    <ScreenContainer authenticatedBackground scrollable contentStyle={{ paddingBottom: 85 }}>
       {/* 👤 Dynamic Header Row */}
       <View style={styles.headerRow}>
         <Pressable onPress={() => router.push('/(app)/(tabs)/profile' as any)}>

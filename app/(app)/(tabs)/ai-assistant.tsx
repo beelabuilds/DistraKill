@@ -95,7 +95,7 @@ export default function AiAssistantScreen() {
   ) : null;
 
   return (
-    <ScreenContainer contentStyle={[styles.screen, { paddingBottom: TAB_BAR_HEIGHT + TAB_BAR_BOTTOM + insets.bottom + 8 }]} contentWidthStyle={styles.content} topRight={<ThemeToggleButton />}>
+    <ScreenContainer authenticatedBackground contentStyle={[styles.screen, { paddingBottom: TAB_BAR_HEIGHT + TAB_BAR_BOTTOM + insets.bottom + 8 }]} contentWidthStyle={styles.content} topRight={<ThemeToggleButton />}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         <View style={styles.header}>
           <View style={[styles.iconBubble, { backgroundColor: theme.surface, borderColor: theme.border }]}><Ionicons name="sparkles-outline" size={25} color={theme.primary} /></View>

@@ -468,7 +468,7 @@ export default function StudyPlannerScreen() {
   );
 
   return (
-    <ScreenContainer scrollable contentStyle={{ paddingBottom: 85 }}>
+    <ScreenContainer authenticatedBackground scrollable contentStyle={{ paddingBottom: 85 }}>
       {/* Sleek Minimal Header */}
       <View style={styles.topHeader}>
         <View>
