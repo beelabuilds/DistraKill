@@ -3,32 +3,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import {
-  EmailAuthProvider,
-  reauthenticateWithCredential,
-  updatePassword,
-  updateProfile,
+    EmailAuthProvider,
+    reauthenticateWithCredential,
+    updatePassword,
+    updateProfile,
 } from 'firebase/auth';
 import {
-  collection,
-  doc,
-  getDoc,
-  onSnapshot,
-  setDoc,
+    collection,
+    doc,
+    getDoc,
+    onSnapshot,
+    setDoc,
 } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { ScreenContainer } from '@/components/auth/screen-container';
@@ -467,7 +467,7 @@ export default function ProfileScreen() {
       : 0;
 
   return (
-    <ScreenContainer scrollable contentStyle={{ paddingBottom: 110 }}>
+    <ScreenContainer authenticatedBackground scrollable contentStyle={{ paddingBottom: 110 }}>
       {/* 👤 Profile Hero Card */}
       <View
         style={[
