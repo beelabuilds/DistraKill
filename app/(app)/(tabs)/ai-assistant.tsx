@@ -10,6 +10,7 @@ import { Radius, Spacing, Typography } from '@/constants/auth-theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useAuthTheme } from '@/hooks/use-auth-theme';
 import { answerQuestion, detectAssistantIntent } from '@/services/ai-service';
+import { sanitizeAssistantText } from '@/services/assistant-text-sanitizer';
 import type { GeneralChatHistory } from '@/services/general-ai-service';
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; createdAt: Date; source: 'app' | 'general' };
@@ -41,6 +42,7 @@ export default function AiAssistantScreen() {
     messageIdRef.current += 1;
     const messageId = messageIdRef.current;
     const assistantId = `${messageId}-assistant`;
+    let streamedAssistantText = '';
     setInput('');
     setIsLoading(true);
     let assistantIdForRequest: string | null = null;
@@ -56,10 +58,14 @@ export default function AiAssistantScreen() {
         setMessages((current) => [...current, { id: assistantId, role: 'assistant', text: '', createdAt: new Date(), source: 'general' }]);
       }
       const result = await answerQuestion(text, user?.uid, user?.name, generalHistory, intent === 'general'
-        ? (chunk) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: message.text + chunk } : message))
+        ? (chunk) => {
+          streamedAssistantText += chunk;
+          const cleanText = sanitizeAssistantText(streamedAssistantText);
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: cleanText } : message));
+        }
         : undefined);
       if (intent === 'general') {
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: result.text } : message));
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: sanitizeAssistantText(result.text) } : message));
       } else {
         setMessages((current) => [...current, { id: assistantId, role: 'assistant', text: result.text, createdAt: new Date(), source: 'app' }]);
       }
