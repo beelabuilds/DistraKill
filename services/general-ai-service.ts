@@ -1,5 +1,7 @@
 import { GoogleGenAI, type Content } from '@google/genai';
 
+import { sanitizeAssistantText } from '@/services/assistant-text-sanitizer';
+
 export type GeneralChatMessage = {
   role: 'user' | 'model';
   text: string;
@@ -14,6 +16,7 @@ const SYSTEM_INSTRUCTION = `You are the DistraKill Study Assistant, a helpful ed
 Answer general knowledge and study questions clearly, accurately, and concisely.
 Use simple explanations unless the user asks for more detail.
 Give concise answers by default, usually 2–5 short paragraphs or bullets unless the user asks for more detail.
+Return clean plain text for a mobile chat bubble. Do not use Markdown bold, italic markers, headings, asterisks around words, backticks, or code fences.
 Never invent the user's tasks, study planner data, focus history, profile information, Quran verses, duas, or Hadith references.
 Private or app-specific information must come only from DistraKill's own data services.
 For general knowledge questions, answer normally.`;
@@ -77,8 +80,9 @@ export async function generateGeneralAnswerStream(
       }
     }
 
-    if (!answer.trim()) return "I couldn't get a usable answer from the AI service. Please try again.";
-    return answer.trim();
+    const cleanAnswer = sanitizeAssistantText(answer.trim());
+    if (!cleanAnswer) return "I couldn't get a usable answer from the AI service. Please try again.";
+    return cleanAnswer;
   } catch (error) {
     if (__DEV__) {
       const category = error instanceof Error ? error.name : 'unknown-error';
